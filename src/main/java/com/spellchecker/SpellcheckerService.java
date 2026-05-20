@@ -108,22 +108,62 @@ class SpellcheckerService
 		{
 			return true;
 		}
-		if (baseDict.contains(t) || customDict.contains(t))
+		if (inDict(t))
 		{
 			return true;
 		}
-		// strip a trailing 's or s and try the root, so "tbow's" and "scythes" hit the dict
-		String root = t;
-		if (root.endsWith("'s") && root.length() > 2)
+		// Strip a trailing 's (possessive) and try the root.
+		if (t.endsWith("'s") && t.length() > 2 && inDict(t.substring(0, t.length() - 2)))
 		{
-			root = root.substring(0, root.length() - 2);
+			return true;
 		}
-		else if (root.endsWith("s") && root.length() > 1)
+		// Try common English suffixes with morphological reversals (e-drop,
+		// consonant doubling, y/i). If any candidate root is in the dict, accept.
+		for (String suffix : SUFFIXES)
 		{
-			root = root.substring(0, root.length() - 1);
+			if (!t.endsWith(suffix) || t.length() <= suffix.length() + 1)
+			{
+				continue;
+			}
+			String root = t.substring(0, t.length() - suffix.length());
+			if (inDict(root))
+			{
+				return true;
+			}
+			// e-drop reversal: hoped → hope, taker → take, making → make
+			if (inDict(root + "e"))
+			{
+				return true;
+			}
+			// consonant-doubling reversal: running → run, stopped → stop, planner → plan
+			if (root.length() >= 2 && root.charAt(root.length() - 1) == root.charAt(root.length() - 2)
+				&& inDict(root.substring(0, root.length() - 1)))
+			{
+				return true;
+			}
+			// y/i reversal: happily → happy, easier → easy, prettiest → pretty
+			if (root.endsWith("i") && inDict(root.substring(0, root.length() - 1) + "y"))
+			{
+				return true;
+			}
 		}
-		return baseDict.contains(root) || customDict.contains(root);
+		return false;
 	}
+
+	private boolean inDict(String w)
+	{
+		return baseDict.contains(w) || customDict.contains(w);
+	}
+
+	// Order is not load-bearing — every suffix that matches is tried. Listed
+	// roughly longest-first for readability.
+	private static final String[] SUFFIXES = {
+		"ation", "ition", "ities", "iness",
+		"ness", "ment", "able", "ible", "ious", "less", "ful", "ing",
+		"tion", "sion", "ize", "ise", "ist", "ity", "ous",
+		"ies", "iest", "ier", "ily",
+		"ers", "est", "ed", "es", "er", "ly", "s", "y"
+	};
 
 	private boolean isChatspeak(String t)
 	{
