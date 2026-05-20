@@ -1,0 +1,14 @@
+build/
+.gradle/
+.idea/
+*.iml
+out/
+bin/
+
+# Claude
+CLAUDE.md
+docs/
+.claude/
+
+# Dev artifacts
+*.zip
