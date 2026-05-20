@@ -13,7 +13,6 @@ import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
 import net.runelite.api.FontTypeFace;
 import net.runelite.api.MenuAction;
-import net.runelite.api.MenuEntry;
 import net.runelite.api.Point;
 import net.runelite.api.VarClientStr;
 import net.runelite.api.events.MenuOpened;
@@ -146,18 +145,24 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 		{
 			return;
 		}
-		// Only act if the menu was opened on the chatbox input widget.
-		boolean onInput = false;
-		for (MenuEntry me : event.getMenuEntries())
+		// Only act if the right-click landed inside the chatbox input widget bounds.
+		// The "Cancel"-only menu has no entry pointing at INPUT, so a widget-id check
+		// on event.getMenuEntries() misses it.
+		Widget input = client.getWidget(InterfaceID.Chatbox.INPUT);
+		Point mouse = client.getMouseCanvasPosition();
+		if (input == null || input.isHidden() || mouse == null)
 		{
-			Widget w = me.getWidget();
-			if (w != null && w.getId() == InterfaceID.Chatbox.INPUT)
-			{
-				onInput = true;
-				break;
-			}
+			return;
 		}
-		if (!onInput)
+		Point loc = input.getCanvasLocation();
+		if (loc == null)
+		{
+			return;
+		}
+		int mx = mouse.getX();
+		int my = mouse.getY();
+		if (mx < loc.getX() || mx > loc.getX() + input.getWidth()
+			|| my < loc.getY() || my > loc.getY() + input.getHeight())
 		{
 			return;
 		}
