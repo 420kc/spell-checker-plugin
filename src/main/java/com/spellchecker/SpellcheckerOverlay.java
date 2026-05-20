@@ -100,8 +100,13 @@ class SpellcheckerOverlay extends Overlay
 
 	private Widget findInputWidget(String typed)
 	{
-		// Scan CHATBOX children for the one whose text contains the typed buffer.
-		// TODO: replace with a direct gameval child reference once we pin it down.
+		// Direct packed-id lookup: InterfaceID.Chatbox.INPUT = (162 << 16) | 57.
+		Widget input = client.getWidget(InterfaceID.Chatbox.INPUT);
+		if (input != null && !input.isHidden())
+		{
+			return input;
+		}
+		// Fallback: scan CHATBOX children if the gameval ever moves again.
 		Widget chatbox = client.getWidget(InterfaceID.CHATBOX, 0);
 		if (chatbox == null)
 		{
