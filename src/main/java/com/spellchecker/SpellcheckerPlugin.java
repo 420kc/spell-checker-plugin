@@ -11,8 +11,15 @@ import lombok.Getter;
 import lombok.Value;
 import lombok.extern.slf4j.Slf4j;
 import net.runelite.api.Client;
+import net.runelite.api.FontTypeFace;
+import net.runelite.api.MenuAction;
+import net.runelite.api.MenuEntry;
+import net.runelite.api.Point;
 import net.runelite.api.VarClientStr;
+import net.runelite.api.events.MenuOpened;
 import net.runelite.api.events.VarClientStrChanged;
+import net.runelite.api.gameval.InterfaceID;
+import net.runelite.api.widgets.Widget;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.ConfigChanged;
@@ -132,20 +139,130 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 		}
 	}
 
-	@Override
-	public void keyPressed(KeyEvent e)
+	@Subscribe
+	public void onMenuOpened(MenuOpened event)
 	{
-		if (!config.addWordHotkey().matches(e))
+		if (!config.enabled() || flagged.isEmpty())
 		{
 			return;
 		}
-		if (flagged.isEmpty())
+		// Only act if the menu was opened on the chatbox input widget.
+		boolean onInput = false;
+		for (MenuEntry me : event.getMenuEntries())
+		{
+			Widget w = me.getWidget();
+			if (w != null && w.getId() == InterfaceID.Chatbox.INPUT)
+			{
+				onInput = true;
+				break;
+			}
+		}
+		if (!onInput)
 		{
 			return;
 		}
-		FlaggedToken last = flagged.get(flagged.size() - 1);
-		String addition = last.getText().toLowerCase();
 
+		FlaggedToken target = findTokenAtMouse();
+		if (target == null)
+		{
+			return;
+		}
+		final String word = target.getText();
+		final FlaggedToken tk = target;
+
+		// "Add to dictionary" entry sits below the suggestions.
+		client.createMenuEntry(-1)
+			.setOption("Add to dictionary")
+			.setTarget("<col=ffff00>" + word + "</col>")
+			.setType(MenuAction.RUNELITE)
+			.onClick(me -> addToDict(word));
+
+		// Suggestions: insert in reverse so the top-ranked one ends up at the top.
+		List<String> suggestions = service.suggest(word, 3);
+		for (int i = suggestions.size() - 1; i >= 0; i--)
+		{
+			final String s = suggestions.get(i);
+			client.createMenuEntry(-1)
+				.setOption("Replace with")
+				.setTarget("<col=00ff00>" + s + "</col>")
+				.setType(MenuAction.RUNELITE)
+				.onClick(me -> replaceToken(tk, s));
+		}
+	}
+
+	private FlaggedToken findTokenAtMouse()
+	{
+		Widget input = client.getWidget(InterfaceID.Chatbox.INPUT);
+		if (input == null)
+		{
+			return null;
+		}
+		String typed = client.getVarcStrValue(VarClientStr.CHATBOX_TYPED_TEXT);
+		if (typed == null || typed.isEmpty())
+		{
+			return null;
+		}
+		String widgetText = input.getText();
+		if (widgetText == null)
+		{
+			return null;
+		}
+		int typedStart = widgetText.indexOf(typed);
+		if (typedStart < 0)
+		{
+			return null;
+		}
+		FontTypeFace font = input.getFont();
+		if (font == null)
+		{
+			return null;
+		}
+		Point loc = input.getCanvasLocation();
+		Point mouse = client.getMouseCanvasPosition();
+		if (loc == null || mouse == null)
+		{
+			return null;
+		}
+		int prefixWidth = font.getTextWidth(widgetText.substring(0, typedStart));
+		int relX = mouse.getX() - loc.getX() - prefixWidth;
+		if (relX < 0)
+		{
+			return null;
+		}
+		for (FlaggedToken t : flagged)
+		{
+			int xStart = font.getTextWidth(typed.substring(0, t.getStart()));
+			int xEnd = font.getTextWidth(typed.substring(0, t.getEnd()));
+			// 2px slack so the squiggle edges count.
+			if (relX >= xStart - 2 && relX <= xEnd + 2)
+			{
+				return t;
+			}
+		}
+		return null;
+	}
+
+	private void replaceToken(FlaggedToken token, String replacement)
+	{
+		String buf = client.getVarcStrValue(VarClientStr.CHATBOX_TYPED_TEXT);
+		if (buf == null || token.getEnd() > buf.length())
+		{
+			return;
+		}
+		// Race-condition guard: token might have shifted if the user kept typing.
+		String found = buf.substring(token.getStart(), token.getEnd());
+		if (!found.equalsIgnoreCase(token.getText()))
+		{
+			return;
+		}
+		String updated = buf.substring(0, token.getStart()) + replacement + buf.substring(token.getEnd());
+		client.setVarcStrValue(VarClientStr.CHATBOX_TYPED_TEXT, updated);
+		log.debug("replaced '{}' with '{}'", token.getText(), replacement);
+	}
+
+	private void addToDict(String word)
+	{
+		String addition = word.toLowerCase();
 		String csv = config.customDict();
 		if (csv == null)
 		{
@@ -162,6 +279,20 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 		String updated = csv.isEmpty() ? addition : csv + "," + addition;
 		configManager.setConfiguration(SpellcheckerConfig.GROUP, "customDict", updated);
 		log.debug("added '{}' to personal dictionary", addition);
+	}
+
+	@Override
+	public void keyPressed(KeyEvent e)
+	{
+		if (!config.addWordHotkey().matches(e))
+		{
+			return;
+		}
+		if (flagged.isEmpty())
+		{
+			return;
+		}
+		addToDict(flagged.get(flagged.size() - 1).getText());
 	}
 
 	@Override
