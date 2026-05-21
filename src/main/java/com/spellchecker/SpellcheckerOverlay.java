@@ -5,11 +5,7 @@ import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.Graphics2D;
 import java.awt.geom.Path2D;
-import java.util.ArrayList;
-import java.util.Comparator;
 import java.util.List;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import javax.inject.Inject;
 import net.runelite.api.Client;
 import net.runelite.api.FontTypeFace;
@@ -34,12 +30,7 @@ import net.runelite.client.ui.overlay.OverlayPriority;
 class SpellcheckerOverlay extends Overlay
 {
 	private static final Color SIBLING_GREEN = new Color(30, 200, 30);
-	private static final Pattern[] SIBLING_PATTERNS = {
-		Pattern.compile("blaze it!"),
-		Pattern.compile("\\b420 kc\\b"),
-		Pattern.compile("\\b420kc\\b"),
-		Pattern.compile("\\b420\\b"),
-	};
+	private static final Color GRAMMAR_BLUE = new Color(70, 130, 230);
 
 	private final Client client;
 	private final SpellcheckerPlugin plugin;
@@ -64,17 +55,16 @@ class SpellcheckerOverlay extends Overlay
 			return null;
 		}
 
-		String typed = client.getVarcStrValue(VarClientStr.CHATBOX_TYPED_TEXT);
-		if (typed == null || typed.isEmpty())
+		List<SpellcheckerPlugin.FlaggedToken> red = plugin.getFlagged();
+		List<int[]> green = plugin.getGreenRanges();
+		List<SpellcheckerPlugin.GrammarHit> blue = plugin.getGrammarHits();
+		if (red.isEmpty() && green.isEmpty() && blue.isEmpty())
 		{
 			return null;
 		}
 
-		List<int[]> siblingRanges = plugin.isSiblingPluginLoaded()
-			? findSiblingRanges(typed)
-			: java.util.Collections.emptyList();
-
-		if (plugin.getFlagged().isEmpty() && siblingRanges.isEmpty())
+		String typed = client.getVarcStrValue(VarClientStr.CHATBOX_TYPED_TEXT);
+		if (typed == null || typed.isEmpty())
 		{
 			return null;
 		}
@@ -84,48 +74,61 @@ class SpellcheckerOverlay extends Overlay
 		{
 			return null;
 		}
-
 		FontTypeFace font = input.getFont();
-		if (font == null)
-		{
-			return null;
-		}
-
-		// Widget shows something like "Username: <typed>*" — find where the typed part starts.
-		// lastIndexOf, not indexOf, so an RSN like "420 kc" doesn't shadow a typed "420".
-		String widgetText = input.getText();
-		int typedStart = widgetText == null ? -1 : widgetText.lastIndexOf(typed);
-		if (typedStart < 0)
-		{
-			return null;
-		}
-		String prefix = widgetText.substring(0, typedStart);
-		int prefixWidth = font.getTextWidth(prefix);
-
 		Point loc = input.getCanvasLocation();
-		if (loc == null)
+		if (font == null || loc == null)
 		{
 			return null;
 		}
+
+		// Widget format is "RSN: <typed>*". Anchor on the colon-space separator
+		// rather than searching for `typed` inside widgetText — an RSN that
+		// contains the typed string (e.g. "420 kc" while typing "420") used to
+		// shadow the input.
+		String widgetText = input.getText();
+		int prefixEnd = widgetText == null ? -1 : widgetText.lastIndexOf(": ");
+		if (prefixEnd < 0)
+		{
+			return null;
+		}
+		prefixEnd += 2;
+		int prefixWidth = font.getTextWidth(widgetText.substring(0, prefixEnd));
+
 		int baseX = loc.getX() + prefixWidth;
 		int baseY = loc.getY() + input.getHeight() - 2;
 
 		// Red squiggles for misspelled tokens.
 		g.setColor(config.underlineColor());
 		g.setStroke(new BasicStroke(1f));
-		for (SpellcheckerPlugin.FlaggedToken t : plugin.getFlagged())
+		for (SpellcheckerPlugin.FlaggedToken t : red)
 		{
 			int x1 = baseX + font.getTextWidth(typed.substring(0, t.getStart()));
 			int x2 = baseX + font.getTextWidth(typed.substring(0, t.getEnd()));
 			drawSquiggle(g, x1, x2, baseY);
 		}
 
-		// Sibling-plugin green underline.
-		if (!siblingRanges.isEmpty())
+		// Blue grammar underlines — dotted to visually distinguish from green solid
+		// and the red squiggle.
+		if (!blue.isEmpty())
+		{
+			g.setColor(GRAMMAR_BLUE);
+			g.setStroke(new BasicStroke(1.5f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER,
+				1f, new float[]{2f, 2f}, 0f));
+			for (SpellcheckerPlugin.GrammarHit h : blue)
+			{
+				int x1 = baseX + font.getTextWidth(typed.substring(0, h.getStart()));
+				int x2 = baseX + font.getTextWidth(typed.substring(0, h.getEnd()));
+				g.drawLine(x1, baseY, x2, baseY);
+			}
+		}
+
+		// Sibling-plugin green underline — solid so it reads as a "feature" rather
+		// than an "error".
+		if (!green.isEmpty())
 		{
 			g.setColor(SIBLING_GREEN);
 			g.setStroke(new BasicStroke(2f));
-			for (int[] r : siblingRanges)
+			for (int[] r : green)
 			{
 				int x1 = baseX + font.getTextWidth(typed.substring(0, r[0]));
 				int x2 = baseX + font.getTextWidth(typed.substring(0, r[1]));
@@ -133,39 +136,6 @@ class SpellcheckerOverlay extends Overlay
 			}
 		}
 		return null;
-	}
-
-	private List<int[]> findSiblingRanges(String typed)
-	{
-		String t = typed.toLowerCase();
-		List<int[]> all = new ArrayList<>();
-		for (Pattern p : SIBLING_PATTERNS)
-		{
-			Matcher m = p.matcher(t);
-			while (m.find())
-			{
-				all.add(new int[]{m.start(), m.end()});
-			}
-		}
-		if (all.isEmpty())
-		{
-			return all;
-		}
-		// Drop entries fully contained in a longer / earlier match
-		// (e.g. "420" inside "420 kc" — only the outer match keeps the underline).
-		all.sort(Comparator.<int[]>comparingInt(a -> a[0]).thenComparing(a -> -a[1]));
-		List<int[]> out = new ArrayList<>();
-		int lastEnd = -1;
-		for (int[] r : all)
-		{
-			if (r[1] <= lastEnd)
-			{
-				continue;
-			}
-			out.add(r);
-			lastEnd = r[1];
-		}
-		return out;
 	}
 
 	private Widget findInputWidget(String typed)

@@ -3,6 +3,8 @@ package com.spellchecker;
 import com.google.inject.Provides;
 import java.awt.event.KeyEvent;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -40,6 +42,63 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 {
 	private static final Pattern TOKEN_PATTERN = Pattern.compile("[A-Za-z']+");
 
+	// Buffer-level patterns underlined green when the sibling plugin is loaded.
+	// Ordered longest-first so overlap dedupe keeps the outer match.
+	private static final Pattern[] SIBLING_PATTERNS = {
+		Pattern.compile("blaze it!"),
+		Pattern.compile("\\b420 kc\\b"),
+		Pattern.compile("\\b420kc\\b"),
+		Pattern.compile("\\b420\\b"),
+	};
+
+	// Common usage / homophone mistakes — underlined blue with a suggested rewrite.
+	// Patterns are matched against a lowercased buffer; suggestions are inserted verbatim.
+	private static final GrammarRule[] GRAMMAR_RULES = grammarRules();
+
+	private static GrammarRule[] grammarRules()
+	{
+		List<GrammarRule> r = new ArrayList<>();
+		// a-prefix mashups
+		r.add(GrammarRule.of("\\balot\\b", "a lot"));
+		r.add(GrammarRule.of("\\balittle\\b", "a little"));
+		r.add(GrammarRule.of("\\babit\\b", "a bit"));
+		// "X of" → "X have"
+		for (String modal : new String[]{"should", "could", "would", "might", "must"})
+		{
+			r.add(GrammarRule.of("\\b" + modal + " of\\b", modal + " have"));
+		}
+		// your → you're (only contexts where you're is almost always right)
+		String[] yourTriggers = {
+			"welcome", "right", "wrong", "awesome", "amazing", "great", "funny",
+			"crazy", "stupid", "dumb", "smart", "beautiful", "gonna", "not", "so",
+			"too", "the", "a", "an", "being", "doing", "making", "getting", "going",
+		};
+		for (String t : yourTriggers)
+		{
+			r.add(GrammarRule.of("\\byour " + t + "\\b", "you're " + t));
+		}
+		// their → they're
+		String[] theirTriggers = {
+			"going", "gonna", "here", "right", "wrong", "not", "the", "a", "an",
+			"being", "doing", "coming",
+		};
+		for (String t : theirTriggers)
+		{
+			r.add(GrammarRule.of("\\btheir " + t + "\\b", "they're " + t));
+		}
+		// comparative + "then" → "than"
+		String[] comparatives = {
+			"more", "less", "rather", "better", "worse", "bigger", "smaller",
+			"taller", "shorter", "easier", "harder", "richer", "poorer", "faster",
+			"slower", "older", "younger", "cheaper", "weaker", "stronger", "fewer",
+		};
+		for (String c : comparatives)
+		{
+			r.add(GrammarRule.of("\\b" + c + " then\\b", c + " than"));
+		}
+		return r.toArray(new GrammarRule[0]);
+	}
+
 	@Inject private Client client;
 	@Inject private SpellcheckerConfig config;
 	@Inject private ConfigManager configManager;
@@ -51,6 +110,12 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 
 	@Getter
 	private final List<FlaggedToken> flagged = new ArrayList<>();
+
+	@Getter
+	private final List<int[]> greenRanges = new ArrayList<>();
+
+	@Getter
+	private final List<GrammarHit> grammarHits = new ArrayList<>();
 
 	@Getter
 	private volatile boolean siblingPluginLoaded;
@@ -108,7 +173,19 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 	@Subscribe
 	public void onPluginChanged(PluginChanged e)
 	{
+		// Only react when the sibling plugin itself toggles — every other plugin
+		// in the system doesn't affect us.
+		String name = e.getPlugin().getClass().getSimpleName();
+		if (!"Rank1Plugin".equals(name) && !"FourTwentyKcPlugin".equals(name))
+		{
+			return;
+		}
+		boolean was = siblingPluginLoaded;
 		refreshSiblingPlugin();
+		if (was != siblingPluginLoaded)
+		{
+			recheck();
+		}
 	}
 
 	private void refreshSiblingPlugin()
@@ -123,6 +200,8 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 	private void recheck()
 	{
 		flagged.clear();
+		greenRanges.clear();
+		grammarHits.clear();
 		if (!config.enabled())
 		{
 			return;
@@ -139,6 +218,33 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 			return;
 		}
 
+		// Three layers, highest-precedence first. Each later layer skips ranges
+		// already painted by an earlier one, so we never stack underlines.
+		//   1. green (sibling-plugin brand mark)
+		//   2. blue  (grammar)
+		//   3. red   (spelling)
+		String lower = buf.toLowerCase();
+
+		if (siblingPluginLoaded)
+		{
+			greenRanges.addAll(scanSiblingRanges(lower));
+		}
+
+		for (GrammarRule rule : GRAMMAR_RULES)
+		{
+			Matcher m = rule.getPattern().matcher(lower);
+			while (m.find())
+			{
+				if (overlapsAny(m.start(), m.end(), greenRanges)
+					|| overlapsGrammar(m.start(), m.end()))
+				{
+					continue;
+				}
+				grammarHits.add(new GrammarHit(buf.substring(m.start(), m.end()),
+					rule.getSuggestion(), m.start(), m.end()));
+			}
+		}
+
 		Matcher m = TOKEN_PATTERN.matcher(buf);
 		while (m.find())
 		{
@@ -151,6 +257,11 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 			{
 				continue;
 			}
+			if (overlapsAny(m.start(), m.end(), greenRanges)
+				|| overlapsGrammar(m.start(), m.end()))
+			{
+				continue;
+			}
 			flagged.add(new FlaggedToken(tok, m.start(), m.end()));
 		}
 
@@ -160,10 +271,67 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 		}
 	}
 
+	private static boolean overlapsAny(int start, int end, List<int[]> ranges)
+	{
+		for (int[] g : ranges)
+		{
+			if (start < g[1] && end > g[0])
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private boolean overlapsGrammar(int start, int end)
+	{
+		for (GrammarHit h : grammarHits)
+		{
+			if (start < h.getEnd() && end > h.getStart())
+			{
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private static List<int[]> scanSiblingRanges(String buf)
+	{
+		String t = buf.toLowerCase();
+		List<int[]> all = new ArrayList<>();
+		for (Pattern p : SIBLING_PATTERNS)
+		{
+			Matcher m = p.matcher(t);
+			while (m.find())
+			{
+				all.add(new int[]{m.start(), m.end()});
+			}
+		}
+		if (all.isEmpty())
+		{
+			return Collections.emptyList();
+		}
+		// Drop matches fully contained inside an earlier longer match
+		// (e.g. "420" inside "420 kc" — only the outer span keeps the underline).
+		all.sort(Comparator.<int[]>comparingInt(a -> a[0]).thenComparing(a -> -a[1]));
+		List<int[]> out = new ArrayList<>();
+		int lastEnd = -1;
+		for (int[] r : all)
+		{
+			if (r[1] <= lastEnd)
+			{
+				continue;
+			}
+			out.add(r);
+			lastEnd = r[1];
+		}
+		return out;
+	}
+
 	@Subscribe
 	public void onMenuOpened(MenuOpened event)
 	{
-		if (!config.enabled() || flagged.isEmpty())
+		if (!config.enabled() || (flagged.isEmpty() && grammarHits.isEmpty()))
 		{
 			return;
 		}
@@ -186,6 +354,20 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 		if (mx < loc.getX() || mx > loc.getX() + input.getWidth()
 			|| my < loc.getY() || my > loc.getY() + input.getHeight())
 		{
+			return;
+		}
+
+		// Grammar hit takes precedence over a spelling flag if they coexist
+		// (they shouldn't — recheck enforces non-overlap — but be safe).
+		GrammarHit hit = findGrammarHitAtMouse();
+		if (hit != null)
+		{
+			final GrammarHit h = hit;
+			client.createMenuEntry(-1)
+				.setOption("Replace with")
+				.setTarget("<col=4682e6>" + h.getSuggestion() + "</col>")
+				.setType(MenuAction.RUNELITE)
+				.onClick(me -> replaceRange(h.getStart(), h.getEnd(), h.getMatched(), h.getSuggestion()));
 			return;
 		}
 
@@ -219,6 +401,46 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 
 	private FlaggedToken findTokenAtMouse()
 	{
+		HitGeometry geom = hitGeometry();
+		if (geom == null)
+		{
+			return null;
+		}
+		for (FlaggedToken t : flagged)
+		{
+			if (geom.contains(t.getStart(), t.getEnd()))
+			{
+				return t;
+			}
+		}
+		return null;
+	}
+
+	private GrammarHit findGrammarHitAtMouse()
+	{
+		HitGeometry geom = hitGeometry();
+		if (geom == null)
+		{
+			return null;
+		}
+		for (GrammarHit h : grammarHits)
+		{
+			if (geom.contains(h.getStart(), h.getEnd()))
+			{
+				return h;
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * Captures the geometry needed to map the mouse canvas position to a
+	 * character range in the typed buffer. Returns null if any link in the
+	 * chain (widget, font, mouse) is unavailable or the mouse is outside the
+	 * typed portion.
+	 */
+	private HitGeometry hitGeometry()
+	{
 		Widget input = client.getWidget(InterfaceID.Chatbox.INPUT);
 		if (input == null)
 		{
@@ -230,62 +452,71 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 			return null;
 		}
 		String widgetText = input.getText();
-		if (widgetText == null)
+		int prefixEnd = widgetText == null ? -1 : widgetText.lastIndexOf(": ");
+		if (prefixEnd < 0)
 		{
 			return null;
 		}
-		// lastIndexOf so the typed text isn't shadowed by occurrences inside the RSN prefix.
-		int typedStart = widgetText.lastIndexOf(typed);
-		if (typedStart < 0)
-		{
-			return null;
-		}
+		prefixEnd += 2;
 		FontTypeFace font = input.getFont();
-		if (font == null)
-		{
-			return null;
-		}
 		Point loc = input.getCanvasLocation();
 		Point mouse = client.getMouseCanvasPosition();
-		if (loc == null || mouse == null)
+		if (font == null || loc == null || mouse == null)
 		{
 			return null;
 		}
-		int prefixWidth = font.getTextWidth(widgetText.substring(0, typedStart));
+		int prefixWidth = font.getTextWidth(widgetText.substring(0, prefixEnd));
 		int relX = mouse.getX() - loc.getX() - prefixWidth;
 		if (relX < 0)
 		{
 			return null;
 		}
-		for (FlaggedToken t : flagged)
+		return new HitGeometry(typed, font, relX);
+	}
+
+	private static final class HitGeometry
+	{
+		private final String typed;
+		private final FontTypeFace font;
+		private final int relX;
+
+		HitGeometry(String typed, FontTypeFace font, int relX)
 		{
-			int xStart = font.getTextWidth(typed.substring(0, t.getStart()));
-			int xEnd = font.getTextWidth(typed.substring(0, t.getEnd()));
-			// 2px slack so the squiggle edges count.
-			if (relX >= xStart - 2 && relX <= xEnd + 2)
-			{
-				return t;
-			}
+			this.typed = typed;
+			this.font = font;
+			this.relX = relX;
 		}
-		return null;
+
+		boolean contains(int start, int end)
+		{
+			int xStart = font.getTextWidth(typed.substring(0, start));
+			int xEnd = font.getTextWidth(typed.substring(0, end));
+			// 2px slack so edge clicks count.
+			return relX >= xStart - 2 && relX <= xEnd + 2;
+		}
 	}
 
 	private void replaceToken(FlaggedToken token, String replacement)
 	{
+		replaceRange(token.getStart(), token.getEnd(), token.getText(), replacement);
+	}
+
+	private void replaceRange(int start, int end, String expected, String replacement)
+	{
 		String buf = client.getVarcStrValue(VarClientStr.CHATBOX_TYPED_TEXT);
-		if (buf == null || token.getEnd() > buf.length())
+		if (buf == null || end > buf.length())
 		{
 			return;
 		}
-		// Race-condition guard: token might have shifted if the user kept typing.
-		String found = buf.substring(token.getStart(), token.getEnd());
-		if (!found.equalsIgnoreCase(token.getText()))
+		// Race-condition guard: range might have shifted if the user kept typing.
+		String found = buf.substring(start, end);
+		if (!found.equalsIgnoreCase(expected))
 		{
 			return;
 		}
-		String updated = buf.substring(0, token.getStart()) + replacement + buf.substring(token.getEnd());
+		String updated = buf.substring(0, start) + replacement + buf.substring(end);
 		client.setVarcStrValue(VarClientStr.CHATBOX_TYPED_TEXT, updated);
-		log.debug("replaced '{}' with '{}'", token.getText(), replacement);
+		log.debug("replaced '{}' with '{}'", expected, replacement);
 	}
 
 	private void addToDict(String word)
@@ -339,5 +570,26 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 		String text;
 		int start;
 		int end;
+	}
+
+	@Value
+	public static class GrammarHit
+	{
+		String matched;
+		String suggestion;
+		int start;
+		int end;
+	}
+
+	@Value
+	private static class GrammarRule
+	{
+		Pattern pattern;
+		String suggestion;
+
+		static GrammarRule of(String regex, String suggestion)
+		{
+			return new GrammarRule(Pattern.compile(regex), suggestion);
+		}
 	}
 }
