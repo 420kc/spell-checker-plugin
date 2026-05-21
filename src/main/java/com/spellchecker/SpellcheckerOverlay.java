@@ -92,8 +92,9 @@ class SpellcheckerOverlay extends Overlay
 		}
 
 		// Widget shows something like "Username: <typed>*" — find where the typed part starts.
+		// lastIndexOf, not indexOf, so an RSN like "420 kc" doesn't shadow a typed "420".
 		String widgetText = input.getText();
-		int typedStart = widgetText == null ? -1 : widgetText.indexOf(typed);
+		int typedStart = widgetText == null ? -1 : widgetText.lastIndexOf(typed);
 		if (typedStart < 0)
 		{
 			return null;

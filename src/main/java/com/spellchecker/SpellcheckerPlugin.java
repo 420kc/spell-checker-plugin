@@ -234,7 +234,8 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 		{
 			return null;
 		}
-		int typedStart = widgetText.indexOf(typed);
+		// lastIndexOf so the typed text isn't shadowed by occurrences inside the RSN prefix.
+		int typedStart = widgetText.lastIndexOf(typed);
 		if (typedStart < 0)
 		{
 			return null;
