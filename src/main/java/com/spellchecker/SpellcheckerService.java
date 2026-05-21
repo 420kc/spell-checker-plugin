@@ -48,10 +48,17 @@ class SpellcheckerService
 
 	private final Set<String> baseDict = new HashSet<>();
 	private final Set<String> customDict = new HashSet<>();
+	// Apostrophe-stripped forms of entries that contain an apostrophe, so that
+	// "dont" / "youre" / "isnt" can match "don't" / "you're" / "isn't" when the
+	// ignore-punctuation toggle is on. Kept in sync with the main sets.
+	private final Set<String> baseDictStripped = new HashSet<>();
+	private final Set<String> customDictStripped = new HashSet<>();
+	private volatile boolean ignorePunctuation;
 
 	void load()
 	{
 		baseDict.clear();
+		baseDictStripped.clear();
 		try (InputStream in = getClass().getResourceAsStream("/com/spellchecker/common-words.txt"))
 		{
 			if (in == null)
@@ -70,6 +77,10 @@ class SpellcheckerService
 						continue;
 					}
 					baseDict.add(w);
+					if (w.indexOf('\'') >= 0)
+					{
+						baseDictStripped.add(w.replace("'", ""));
+					}
 				}
 			}
 		}
@@ -77,12 +88,19 @@ class SpellcheckerService
 		{
 			log.warn("Failed to load common-words.txt", e);
 		}
-		log.debug("Loaded {} base words", baseDict.size());
+		log.debug("Loaded {} base words ({} apostrophe-stripped variants)",
+			baseDict.size(), baseDictStripped.size());
+	}
+
+	void setIgnorePunctuation(boolean v)
+	{
+		this.ignorePunctuation = v;
 	}
 
 	void setCustomDict(String csv)
 	{
 		customDict.clear();
+		customDictStripped.clear();
 		if (csv == null || csv.isEmpty())
 		{
 			return;
@@ -90,9 +108,14 @@ class SpellcheckerService
 		for (String w : csv.split(","))
 		{
 			String t = w.trim().toLowerCase();
-			if (!t.isEmpty())
+			if (t.isEmpty())
 			{
-				customDict.add(t);
+				continue;
+			}
+			customDict.add(t);
+			if (t.indexOf('\'') >= 0)
+			{
+				customDictStripped.add(t.replace("'", ""));
 			}
 		}
 	}
@@ -152,7 +175,14 @@ class SpellcheckerService
 
 	private boolean inDict(String w)
 	{
-		return baseDict.contains(w) || customDict.contains(w);
+		if (baseDict.contains(w) || customDict.contains(w))
+		{
+			return true;
+		}
+		// When ignorePunctuation is on, also accept tokens whose form matches an
+		// apostrophe-stripped dict entry (dont -> don't, youre -> you're).
+		return ignorePunctuation
+			&& (baseDictStripped.contains(w) || customDictStripped.contains(w));
 	}
 
 	// Order is not load-bearing — every suffix that matches is tried. Listed

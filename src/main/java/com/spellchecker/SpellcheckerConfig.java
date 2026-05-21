@@ -68,10 +68,21 @@ public interface SpellcheckerConfig extends Config
 	}
 
 	@ConfigItem(
+		keyName = "ignorePunctuation",
+		name = "Ignore punctuation",
+		description = "Accept contractions typed without apostrophes (dont, youre, isnt) by matching against the apostrophe-stripped dictionary",
+		position = 5
+	)
+	default boolean ignorePunctuation()
+	{
+		return true;
+	}
+
+	@ConfigItem(
 		keyName = "logFlagged",
 		name = "Log flagged words",
 		description = "Print flagged tokens to the RuneLite log (useful while tuning your dictionary)",
-		position = 5
+		position = 6
 	)
 	default boolean logFlagged()
 	{

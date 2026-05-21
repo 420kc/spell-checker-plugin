@@ -125,6 +125,7 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 	{
 		service.load();
 		service.setCustomDict(config.customDict());
+		service.setIgnorePunctuation(config.ignorePunctuation());
 		overlayManager.add(overlay);
 		keyManager.registerKeyListener(this);
 		refreshSiblingPlugin();
@@ -163,10 +164,18 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 		{
 			return;
 		}
-		if ("customDict".equals(e.getKey()))
+		switch (e.getKey())
 		{
-			service.setCustomDict(config.customDict());
-			recheck();
+			case "customDict":
+				service.setCustomDict(config.customDict());
+				recheck();
+				break;
+			case "ignorePunctuation":
+				service.setIgnorePunctuation(config.ignorePunctuation());
+				recheck();
+				break;
+			default:
+				break;
 		}
 	}
 
