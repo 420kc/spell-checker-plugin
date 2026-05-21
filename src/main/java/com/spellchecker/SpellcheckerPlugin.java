@@ -22,10 +22,12 @@ import net.runelite.api.widgets.Widget;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.ConfigChanged;
+import net.runelite.client.events.PluginChanged;
 import net.runelite.client.input.KeyListener;
 import net.runelite.client.input.KeyManager;
 import net.runelite.client.plugins.Plugin;
 import net.runelite.client.plugins.PluginDescriptor;
+import net.runelite.client.plugins.PluginManager;
 import net.runelite.client.ui.overlay.OverlayManager;
 
 @Slf4j
@@ -45,9 +47,13 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 	@Inject private OverlayManager overlayManager;
 	@Inject private KeyManager keyManager;
 	@Inject private SpellcheckerOverlay overlay;
+	@Inject private PluginManager pluginManager;
 
 	@Getter
 	private final List<FlaggedToken> flagged = new ArrayList<>();
+
+	@Getter
+	private volatile boolean siblingPluginLoaded;
 
 	@Override
 	protected void startUp()
@@ -56,6 +62,7 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 		service.setCustomDict(config.customDict());
 		overlayManager.add(overlay);
 		keyManager.registerKeyListener(this);
+		refreshSiblingPlugin();
 		log.debug("Spellchecker started");
 	}
 
@@ -96,6 +103,21 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 			service.setCustomDict(config.customDict());
 			recheck();
 		}
+	}
+
+	@Subscribe
+	public void onPluginChanged(PluginChanged e)
+	{
+		refreshSiblingPlugin();
+	}
+
+	private void refreshSiblingPlugin()
+	{
+		siblingPluginLoaded = pluginManager.getPlugins().stream().anyMatch(p ->
+		{
+			String n = p.getClass().getSimpleName();
+			return "Rank1Plugin".equals(n) || "FourTwentyKcPlugin".equals(n);
+		});
 	}
 
 	private void recheck()
