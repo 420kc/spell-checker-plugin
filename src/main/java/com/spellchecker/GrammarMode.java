@@ -6,7 +6,7 @@ package com.spellchecker;
  *   SAFE       - only unambiguous errors (alot, "should of", comparative + then).
  *   AGGRESSIVE - the above plus context-aware homophones (your/you're, etc.).
  */
-enum GrammarMode
+public enum GrammarMode
 {
 	OFF("Off"),
 	SAFE("Safe"),
