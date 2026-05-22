@@ -57,7 +57,7 @@ class SpellcheckerOverlay extends Overlay
 
 		List<SpellcheckerPlugin.FlaggedToken> red = plugin.getFlagged();
 		List<int[]> green = plugin.getGreenRanges();
-		List<SpellcheckerPlugin.GrammarHit> blue = plugin.getGrammarHits();
+		List<GrammarHit> blue = plugin.getGrammarHits();
 		if (red.isEmpty() && green.isEmpty() && blue.isEmpty())
 		{
 			return null;
@@ -114,7 +114,7 @@ class SpellcheckerOverlay extends Overlay
 			g.setColor(GRAMMAR_BLUE);
 			g.setStroke(new BasicStroke(1.5f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER,
 				1f, new float[]{2f, 2f}, 0f));
-			for (SpellcheckerPlugin.GrammarHit h : blue)
+			for (GrammarHit h : blue)
 			{
 				int x1 = baseX + font.getTextWidth(typed.substring(0, h.getStart()));
 				int x2 = baseX + font.getTextWidth(typed.substring(0, h.getEnd()));

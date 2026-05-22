@@ -51,54 +51,6 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 		Pattern.compile("\\b420\\b"),
 	};
 
-	// Common usage / homophone mistakes — underlined blue with a suggested rewrite.
-	// Patterns are matched against a lowercased buffer; suggestions are inserted verbatim.
-	private static final GrammarRule[] GRAMMAR_RULES = grammarRules();
-
-	private static GrammarRule[] grammarRules()
-	{
-		List<GrammarRule> r = new ArrayList<>();
-		// a-prefix mashups
-		r.add(GrammarRule.of("\\balot\\b", "a lot"));
-		r.add(GrammarRule.of("\\balittle\\b", "a little"));
-		r.add(GrammarRule.of("\\babit\\b", "a bit"));
-		// "X of" → "X have"
-		for (String modal : new String[]{"should", "could", "would", "might", "must"})
-		{
-			r.add(GrammarRule.of("\\b" + modal + " of\\b", modal + " have"));
-		}
-		// your → you're (only contexts where you're is almost always right)
-		String[] yourTriggers = {
-			"welcome", "right", "wrong", "awesome", "amazing", "great", "funny",
-			"crazy", "stupid", "dumb", "smart", "beautiful", "gonna", "not", "so",
-			"too", "the", "a", "an", "being", "doing", "making", "getting", "going",
-		};
-		for (String t : yourTriggers)
-		{
-			r.add(GrammarRule.of("\\byour " + t + "\\b", "you're " + t));
-		}
-		// their → they're
-		String[] theirTriggers = {
-			"going", "gonna", "here", "right", "wrong", "not", "the", "a", "an",
-			"being", "doing", "coming",
-		};
-		for (String t : theirTriggers)
-		{
-			r.add(GrammarRule.of("\\btheir " + t + "\\b", "they're " + t));
-		}
-		// comparative + "then" → "than"
-		String[] comparatives = {
-			"more", "less", "rather", "better", "worse", "bigger", "smaller",
-			"taller", "shorter", "easier", "harder", "richer", "poorer", "faster",
-			"slower", "older", "younger", "cheaper", "weaker", "stronger", "fewer",
-		};
-		for (String c : comparatives)
-		{
-			r.add(GrammarRule.of("\\b" + c + " then\\b", c + " than"));
-		}
-		return r.toArray(new GrammarRule[0]);
-	}
-
 	@Inject private Client client;
 	@Inject private SpellcheckerConfig config;
 	@Inject private ConfigManager configManager;
@@ -107,6 +59,7 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 	@Inject private KeyManager keyManager;
 	@Inject private SpellcheckerOverlay overlay;
 	@Inject private PluginManager pluginManager;
+	@Inject private GrammarChecker grammarChecker;
 
 	@Getter
 	private final List<FlaggedToken> flagged = new ArrayList<>();
@@ -239,18 +192,12 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 			greenRanges.addAll(scanSiblingRanges(lower));
 		}
 
-		for (GrammarRule rule : GRAMMAR_RULES)
+		// Grammar hits are single, non-overlapping tokens — only filter against green.
+		for (GrammarHit h : grammarChecker.check(buf, config.grammarMode()))
 		{
-			Matcher m = rule.getPattern().matcher(lower);
-			while (m.find())
+			if (!overlapsAny(h.getStart(), h.getEnd(), greenRanges))
 			{
-				if (overlapsAny(m.start(), m.end(), greenRanges)
-					|| overlapsGrammar(m.start(), m.end()))
-				{
-					continue;
-				}
-				grammarHits.add(new GrammarHit(buf.substring(m.start(), m.end()),
-					rule.getSuggestion(), m.start(), m.end()));
+				grammarHits.add(h);
 			}
 		}
 
@@ -579,26 +526,5 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 		String text;
 		int start;
 		int end;
-	}
-
-	@Value
-	public static class GrammarHit
-	{
-		String matched;
-		String suggestion;
-		int start;
-		int end;
-	}
-
-	@Value
-	private static class GrammarRule
-	{
-		Pattern pattern;
-		String suggestion;
-
-		static GrammarRule of(String regex, String suggestion)
-		{
-			return new GrammarRule(Pattern.compile(regex), suggestion);
-		}
 	}
 }
