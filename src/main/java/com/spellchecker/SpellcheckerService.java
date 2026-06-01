@@ -24,7 +24,7 @@ import lombok.extern.slf4j.Slf4j;
  *   - chatspeak: a hardcoded allowlist for the obvious abbreviations
  *
  * isCorrect() is the only consumer. Suggestion generation lives separately and is
- * intentionally not part of v0 — get flagging right first, then add suggestions.
+ * intentionally not part of v0 - get flagging right first, then add suggestions.
  */
 @Singleton
 @Slf4j
@@ -185,7 +185,7 @@ class SpellcheckerService
 			&& (baseDictStripped.contains(w) || customDictStripped.contains(w));
 	}
 
-	// Order is not load-bearing — every suffix that matches is tried. Listed
+	// Order is not load-bearing - every suffix that matches is tried. Listed
 	// roughly longest-first for readability.
 	private static final String[] SUFFIXES = {
 		"ation", "ition", "ities", "iness",
@@ -206,13 +206,18 @@ class SpellcheckerService
 		{
 			return true;
 		}
-		// account-style alphanumeric mix: w301, lvl99 — leave alone
+		// account-style alphanumeric mix: w301, lvl99 - leave alone
 		if (t.matches("[a-z]+\\d+") || t.matches("\\d+[a-z]+"))
 		{
 			return true;
 		}
 		// haha / hehe / lolol / ahhh / ohhh / ughhh
 		if (LAUGH.matcher(t).matches())
+		{
+			return true;
+		}
+		// drawn-out interjections: yo / yoo / yooo, ayy / ayyy, woo / wooo
+		if (t.matches("yo+") || t.matches("ay+") || t.matches("wo+"))
 		{
 			return true;
 		}

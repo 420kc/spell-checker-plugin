@@ -16,11 +16,13 @@ import net.runelite.api.Client;
 import net.runelite.api.FontTypeFace;
 import net.runelite.api.MenuAction;
 import net.runelite.api.Point;
+import net.runelite.api.ScriptID;
 import net.runelite.api.VarClientStr;
 import net.runelite.api.events.MenuOpened;
 import net.runelite.api.events.VarClientStrChanged;
 import net.runelite.api.gameval.InterfaceID;
 import net.runelite.api.widgets.Widget;
+import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
 import net.runelite.client.eventbus.Subscribe;
 import net.runelite.client.events.ConfigChanged;
@@ -60,6 +62,8 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 	@Inject private SpellcheckerOverlay overlay;
 	@Inject private PluginManager pluginManager;
 	@Inject private GrammarChecker grammarChecker;
+	@Inject private AutoCorrector autoCorrector;
+	@Inject private ClientThread clientThread;
 
 	@Getter
 	private final List<FlaggedToken> flagged = new ArrayList<>();
@@ -79,6 +83,9 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 		service.load();
 		service.setCustomDict(config.customDict());
 		service.setIgnorePunctuation(config.ignorePunctuation());
+		grammarChecker.setUserPhrases(config.grammarPhrases());
+		autoCorrector.setEnabled(config.autoCorrect());
+		autoCorrector.setList(config.autoCorrectList());
 		overlayManager.add(overlay);
 		keyManager.registerKeyListener(this);
 		refreshSiblingPlugin();
@@ -107,7 +114,34 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 		{
 			return;
 		}
+		if (config.enabled() && tryAutoCorrect())
+		{
+			// The rewrite fires another VarClientStrChanged, which re-runs this
+			// handler and re-checks the corrected text - so we stop here.
+			return;
+		}
 		recheck();
+	}
+
+	/**
+	 * Apply an auto-correction to the typed buffer if one is due. Returns true if
+	 * the buffer was rewritten (and a redraw scheduled), false otherwise.
+	 */
+	private boolean tryAutoCorrect()
+	{
+		String buf = client.getVarcStrValue(VarClientStr.CHATBOX_TYPED_TEXT);
+		if (buf == null || buf.isEmpty()
+			|| buf.startsWith("::") || buf.startsWith(";;") || buf.startsWith("/") || buf.startsWith("~"))
+		{
+			return false;
+		}
+		String corrected = autoCorrector.apply(buf);
+		if (corrected == null || corrected.equals(buf))
+		{
+			return false;
+		}
+		setTypedText(corrected);
+		return true;
 	}
 
 	@Subscribe
@@ -127,6 +161,16 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 				service.setIgnorePunctuation(config.ignorePunctuation());
 				recheck();
 				break;
+			case "grammarPhrases":
+				grammarChecker.setUserPhrases(config.grammarPhrases());
+				recheck();
+				break;
+			case "autoCorrect":
+				autoCorrector.setEnabled(config.autoCorrect());
+				break;
+			case "autoCorrectList":
+				autoCorrector.setList(config.autoCorrectList());
+				break;
 			default:
 				break;
 		}
@@ -135,7 +179,7 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 	@Subscribe
 	public void onPluginChanged(PluginChanged e)
 	{
-		// Only react when the sibling plugin itself toggles — every other plugin
+		// Only react when the sibling plugin itself toggles - every other plugin
 		// in the system doesn't affect us.
 		String name = e.getPlugin().getClass().getSimpleName();
 		if (!"Rank1Plugin".equals(name) && !"FourTwentyKcPlugin".equals(name))
@@ -192,7 +236,7 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 			greenRanges.addAll(scanSiblingRanges(lower));
 		}
 
-		// Grammar hits are single, non-overlapping tokens — only filter against green.
+		// Grammar hits are single, non-overlapping tokens - only filter against green.
 		for (GrammarHit h : grammarChecker.check(buf, config.grammarMode()))
 		{
 			if (!overlapsAny(h.getStart(), h.getEnd(), greenRanges))
@@ -268,7 +312,7 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 			return Collections.emptyList();
 		}
 		// Drop matches fully contained inside an earlier longer match
-		// (e.g. "420" inside "420 kc" — only the outer span keeps the underline).
+		// (e.g. "420" inside "420 kc" - only the outer span keeps the underline).
 		all.sort(Comparator.<int[]>comparingInt(a -> a[0]).thenComparing(a -> -a[1]));
 		List<int[]> out = new ArrayList<>();
 		int lastEnd = -1;
@@ -314,7 +358,7 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 		}
 
 		// Grammar hit takes precedence over a spelling flag if they coexist
-		// (they shouldn't — recheck enforces non-overlap — but be safe).
+		// (they shouldn't - recheck enforces non-overlap - but be safe).
 		GrammarHit hit = findGrammarHitAtMouse();
 		if (hit != null)
 		{
@@ -471,8 +515,24 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 			return;
 		}
 		String updated = buf.substring(0, start) + replacement + buf.substring(end);
-		client.setVarcStrValue(VarClientStr.CHATBOX_TYPED_TEXT, updated);
+		setTypedText(updated);
 		log.debug("replaced '{}' with '{}'", expected, replacement);
+	}
+
+	/**
+	 * Write {@code text} into the chatbox input and force it to repaint now.
+	 * Setting the varc alone updates the value but not the on-screen line - the
+	 * old behaviour needed a stray keystroke (spacebar) to refresh. Running
+	 * CHAT_TEXT_INPUT_REBUILD rebuilds the input widget from the varc immediately,
+	 * so the change is visible the instant it happens.
+	 */
+	private void setTypedText(String text)
+	{
+		clientThread.invokeLater(() ->
+		{
+			client.setVarcStrValue(VarClientStr.CHATBOX_TYPED_TEXT, text);
+			client.runScript(ScriptID.CHAT_TEXT_INPUT_REBUILD, "");
+		});
 	}
 
 	private void addToDict(String word)
@@ -503,11 +563,15 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 		{
 			return;
 		}
-		if (flagged.isEmpty())
+		// flagged is mutated on the client thread (recheck); read it there too so a
+		// concurrent clear can't slip between the empty-check and the access.
+		clientThread.invoke(() ->
 		{
-			return;
-		}
-		addToDict(flagged.get(flagged.size() - 1).getText());
+			if (!flagged.isEmpty())
+			{
+				addToDict(flagged.get(flagged.size() - 1).getText());
+			}
+		});
 	}
 
 	@Override

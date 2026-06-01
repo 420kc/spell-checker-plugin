@@ -11,52 +11,58 @@ import java.util.regex.Pattern;
 import javax.inject.Singleton;
 
 /**
- * Sentence-aware grammar checker. Tokenizes the whole typed line and judges
- * commonly-confused words by how they're used in context (the part-of-speech of
- * their neighbours), instead of matching a fixed list of phrases.
+ * Confusion-set grammar checker. Catches the handful of mistakes people actually
+ * make in chat (their/there/they're, your/you're, its/it's, to/too, then/than,
+ * "should of") and underlines them blue, leaving a one-word right-click fix.
+ *
+ * DESIGN - precision over recall. The previous engine tried to part-of-speech tag
+ * the whole sentence and defaulted every unknown word to NOUN; a single unknown
+ * function word ("their going TO die") poisoned the decision and the error was
+ * never flagged. This rewrite never asks "is this a noun?". It asks "is the next
+ * word in a closed set that PROVES the contraction?" - articles, pronouns,
+ * be/aux verbs, modals, degree adverbs and -ing participles are all small, fully
+ * enumerable classes. We fire only on that positive evidence and stay silent when
+ * unsure, so correct text is essentially never false-flagged.
  *
  * Two tiers, gated by {@link GrammarMode}:
- *   SAFE       - unambiguous errors only: "alot", "should of", comparative + "then".
- *   AGGRESSIVE - the above plus context homophones: your/you're, their/they're,
- *                there/they're, its/it's, to/too.
- *
- * Each hit is a single misused token (e.g. just "your"), so the underline sits on
- * the wrong word and the suggestion swaps that one word — the rest of the sentence
- * is left alone.
+ *   SAFE       - "should of" -> "should have", comparative + "then" -> "than",
+ *                plus the user's own phrase list.
+ *   AGGRESSIVE - the above plus context homophones.
  */
 @Singleton
 class GrammarChecker
 {
 	private static final Pattern WORD = Pattern.compile("[A-Za-z']+");
 
-	private static final Set<String> DETERMINERS = set(
-		"a", "an", "the", "this", "that", "these", "those",
-		"my", "your", "his", "her", "its", "our", "their",
-		"no", "some", "any", "every", "each", "another");
+	// Articles + demonstratives. A possessive (your/their/its) can never sit
+	// directly before one of these, so "your a noob" must be "you're a noob".
+	private static final Set<String> ARTICLES = set("a", "an", "the");
 
-	// Auxiliaries / be-verbs that signal "<subject> is/are ...". Includes the
-	// informal "gonna/wanna/gotta" since they read as "going to".
+	// be / auxiliary verbs and the informal contractions that read as "going to".
+	// These open a predicate, so "<possessive> <aux>" means the contraction.
 	private static final Set<String> AUX = set(
-		"am", "is", "are", "was", "were", "be", "been", "being",
-		"do", "does", "did", "have", "has", "had",
-		"will", "would", "can", "could", "shall", "should", "may", "might", "must",
-		"gonna", "wanna", "gotta", "finna");
+		"be", "been", "being",
+		"gonna", "gunna", "wanna", "gotta", "finna");
 
-	// Subset of AUX that reads as existential after "there" ("there has been ...").
-	// Used to NOT rewrite "there is/are/was/been" to "they're".
+	// Existential be-verbs that make "there ___" correct ("there is a spider").
 	private static final Set<String> EXISTENTIAL = set(
-		"is", "are", "was", "were", "has", "have", "had", "will", "would", "been");
+		"is", "are", "was", "were", "has", "have", "had", "will", "would",
+		"ain't", "isn't", "aren't", "wasn't", "weren't", "s");
 
+	// Degree / sentence adverbs - a closed class. "<possessive> really/not/so ..."
+	// reads as a predicate ("their really good" -> "they're really good").
 	private static final Set<String> ADVERBS = set(
-		"very", "really", "so", "too", "just", "quite", "almost", "always",
-		"never", "often", "sometimes", "usually", "soon", "now", "again",
-		"also", "even", "still", "rather", "pretty", "totally", "completely",
-		"absolutely", "definitely", "probably", "honestly", "literally",
-		"seriously", "actually", "basically", "clearly", "obviously", "barely",
-		"hardly", "nearly", "truly", "simply", "mostly", "entirely", "fully",
-		"slightly", "extremely", "incredibly", "super", "kinda", "sorta",
-		"highly", "deeply", "fairly", "somewhat", "way", "lowkey", "highkey");
+		"not", "very", "really", "so", "too", "just", "quite", "almost", "always",
+		"never", "often", "sometimes", "usually", "soon", "now", "still", "rather",
+		"pretty", "totally", "completely", "absolutely", "definitely", "probably",
+		"honestly", "literally", "seriously", "actually", "basically", "clearly",
+		"obviously", "barely", "hardly", "nearly", "truly", "simply", "mostly",
+		"entirely", "fully", "slightly", "extremely", "incredibly", "super",
+		"kinda", "sorta", "highly", "deeply", "fairly", "somewhat", "lowkey",
+		"highkey", "def", "prolly");
 
+	// Common predicate adjectives - used after a be-verb. Not exhaustive (open
+	// class), but every entry is a true positive signal, never a suppressor.
 	private static final Set<String> COMMON_ADJ = set(
 		"good", "great", "bad", "nice", "mean", "cool", "awesome", "amazing",
 		"incredible", "beautiful", "ugly", "pretty", "handsome", "cute",
@@ -75,21 +81,16 @@ class GrammarChecker
 		"normal", "special", "rare", "common", "perfect", "terrible", "horrible",
 		"wonderful", "fantastic", "excellent", "decent", "solid", "legit",
 		"broke", "broken", "cracked", "based", "cringe", "goated", "mid", "washed",
-		"next", "last", "first", "best", "worst", "main", "whole", "entire");
+		"dead", "alive", "gone", "lost", "stuck", "safe",
+		"rough", "smooth", "wild", "chill", "salty", "toxic", "trash", "nuts");
 
-	// -ing / -ed words that are really nouns, so we don't read them as verbs.
+	// -ing words that are really nouns, so we don't read them as participles.
 	private static final Set<String> NOUN_ING = set(
 		"thing", "something", "anything", "nothing", "everything", "morning",
 		"evening", "ceiling", "building", "feeling", "meeting", "wedding",
 		"ring", "king", "string", "wing", "sting", "spring", "swing", "bling",
-		"earring", "offspring", "sibling", "ending", "beginning", "bed", "red",
-		"shed", "sled", "wed", "fed", "bred");
-
-	private static final Set<String> NOUN_LY = set(
-		"family", "supply", "reply", "apply", "ally", "bully", "jelly", "rally",
-		"only", "ugly", "silly", "early", "holy", "lily", "rely", "comply",
-		"imply", "multiply", "assembly", "anomaly", "monopoly", "belly",
-		"folly", "gully", "alley", "valley", "volley", "trolley", "july");
+		"earring", "offspring", "sibling", "ending", "beginning", "saying",
+		"painting", "drawing", "warning", "clothing", "lightning", "viking");
 
 	private static final Set<String> COMPARATIVES = set(
 		"more", "less", "rather", "other", "better", "worse", "fewer",
@@ -100,7 +101,7 @@ class GrammarChecker
 		"cooler", "hotter", "colder", "happier", "sadder", "tougher", "safer",
 		"smarter", "dumber", "louder", "softer", "cleaner", "rarer", "wiser");
 
-	// "to" before these reads as "too" (excessive / also).
+	// "to" before one of these reads as "too" (excessive / also).
 	private static final Set<String> TOO_TRIGGERS = set(
 		"much", "many", "late", "early", "big", "small", "hard", "easy",
 		"far", "fast", "slow", "soon", "long", "short", "good", "bad",
@@ -110,9 +111,48 @@ class GrammarChecker
 	private static final Set<String> MODALS = set(
 		"should", "could", "would", "might", "must");
 
-	private enum Pos
+	// Built-in phrases that no contextual rule covers cleanly. Right side is the fix.
+	// ("should of" etc. are handled by the modal + "of" rule, not duplicated here.)
+	private static final String[][] BUILTIN_PHRASES = {
+		{"for all intensive purposes", "for all intents and purposes"},
+		{"could care less", "couldn't care less"},
+		{"on accident", "by accident"},
+		{"your welcome", "you're welcome"},
+	};
+
+	private final List<Phrase> builtinPhrases = new ArrayList<>();
+	private final List<Phrase> userPhrases = new ArrayList<>();
+
+	GrammarChecker()
 	{
-		DET, AUX, ADV, ADJ, VERB, NOUN
+		for (String[] p : BUILTIN_PHRASES)
+		{
+			builtinPhrases.add(new Phrase(p[0], p[1]));
+		}
+	}
+
+	/** Parse the user's "wrong=>right, ..." extra-phrase list from config. */
+	void setUserPhrases(String csv)
+	{
+		userPhrases.clear();
+		if (csv == null || csv.isEmpty())
+		{
+			return;
+		}
+		for (String entry : csv.split(","))
+		{
+			int arrow = entry.indexOf("=>");
+			if (arrow < 0)
+			{
+				continue;
+			}
+			String wrong = entry.substring(0, arrow).trim();
+			String right = entry.substring(arrow + 2).trim();
+			if (!wrong.isEmpty() && !right.isEmpty() && !wrong.equalsIgnoreCase(right))
+			{
+				userPhrases.add(new Phrase(wrong, right));
+			}
+		}
 	}
 
 	List<GrammarHit> check(String buffer, GrammarMode mode)
@@ -123,12 +163,52 @@ class GrammarChecker
 			return hits;
 		}
 		List<Tok> toks = tokenize(buffer);
+		addPhraseHits(buffer, hits);
 		addAlwaysWrong(toks, hits);
 		if (mode == GrammarMode.AGGRESSIVE)
 		{
 			addConfusions(toks, hits);
 		}
-		return hits;
+		return dedupeOverlaps(hits);
+	}
+
+	/**
+	 * Keep grammar hits non-overlapping so the same span never gets two blue
+	 * underlines (e.g. the "your welcome" phrase vs. a "your" confusion rule).
+	 * Longest span at a given start wins.
+	 */
+	private static List<GrammarHit> dedupeOverlaps(List<GrammarHit> hits)
+	{
+		if (hits.size() < 2)
+		{
+			return hits;
+		}
+		hits.sort(java.util.Comparator
+			.comparingInt(GrammarHit::getStart)
+			.thenComparing(java.util.Comparator.comparingInt(GrammarHit::getEnd).reversed()));
+		List<GrammarHit> out = new ArrayList<>(hits.size());
+		int lastEnd = -1;
+		for (GrammarHit h : hits)
+		{
+			if (h.getStart() >= lastEnd)
+			{
+				out.add(h);
+				lastEnd = h.getEnd();
+			}
+		}
+		return out;
+	}
+
+	private void addPhraseHits(String buffer, List<GrammarHit> hits)
+	{
+		for (Phrase p : builtinPhrases)
+		{
+			p.findInto(buffer, hits);
+		}
+		for (Phrase p : userPhrases)
+		{
+			p.findInto(buffer, hits);
+		}
 	}
 
 	private void addAlwaysWrong(List<Tok> toks, List<GrammarHit> hits)
@@ -138,16 +218,8 @@ class GrammarChecker
 			Tok t = toks.get(i);
 			switch (t.lower)
 			{
-				case "alot":
-					hits.add(hit(t, "a lot"));
-					break;
-				case "alittle":
-					hits.add(hit(t, "a little"));
-					break;
-				case "abit":
-					hits.add(hit(t, "a bit"));
-					break;
 				case "of":
+					// "should of" -> "should have" (only the "of" is rewritten).
 					if (i > 0 && MODALS.contains(toks.get(i - 1).lower))
 					{
 						hits.add(hit(t, "have"));
@@ -173,25 +245,27 @@ class GrammarChecker
 			switch (t.lower)
 			{
 				case "your":
-					if (impliesToBe(toks, i))
+					if (predicateFollows(toks, i))
 					{
 						hits.add(hit(t, "you're"));
 					}
 					break;
 				case "their":
-					if (impliesToBe(toks, i))
+					if (predicateFollows(toks, i))
 					{
 						hits.add(hit(t, "they're"));
 					}
 					break;
 				case "there":
-					if (impliesToBeNotExistential(toks, i))
+					// "there is/are ..." is existential and correct; only a
+					// non-existential predicate ("there going") means "they're".
+					if (!existentialFollows(toks, i) && predicateFollows(toks, i))
 					{
 						hits.add(hit(t, "they're"));
 					}
 					break;
 				case "its":
-					if (impliesToBe(toks, i))
+					if (predicateFollows(toks, i))
 					{
 						hits.add(hit(t, "it's"));
 					}
@@ -209,112 +283,64 @@ class GrammarChecker
 	}
 
 	/**
-	 * True when a possessive word ("your"/"their"/"its") at index i is actually
-	 * being used as "<subject> is/are ...": the next word begins a be-complement
-	 * (a/an/the, an aux/be-verb, an adverb, an adjective, or an -ing/-ed
-	 * participle) AND the adjective/adverb run does not terminate in a noun
-	 * (which would make it a legit possessive noun phrase like "your nice car").
+	 * True when the word after index {@code i} begins a predicate - i.e. the
+	 * possessive there is really "<subject> is/are". Fires only on positive,
+	 * closed-class evidence: an article, a be/aux verb, a degree adverb, a known
+	 * adjective, or an -ing participle. Anything else (a plain noun, an unknown
+	 * word) leaves the possessive alone. This is the whole precision story.
 	 */
-	private boolean impliesToBe(List<Tok> toks, int i)
+	private boolean predicateFollows(List<Tok> toks, int i)
 	{
 		if (i + 1 >= toks.size())
 		{
 			return false;
 		}
-		Tok next = toks.get(i + 1);
-		// "your a/an/the X" is never a valid possessive → always "you're".
-		if (next.lower.equals("a") || next.lower.equals("an") || next.lower.equals("the"))
-		{
-			return true;
-		}
-		Pos p = classify(next.lower);
-		if (p == Pos.AUX)
-		{
-			return true; // "its been", "your being"
-		}
-		if (p != Pos.ADV && p != Pos.ADJ && p != Pos.VERB)
-		{
-			return false;
-		}
-		return !runEndsInNoun(toks, i + 1);
-	}
-
-	private boolean impliesToBeNotExistential(List<Tok> toks, int i)
-	{
-		if (i + 1 >= toks.size())
-		{
-			return false;
-		}
-		// "there is / are / was / been ..." is existential — leave it.
-		if (EXISTENTIAL.contains(toks.get(i + 1).lower))
-		{
-			return false;
-		}
-		return impliesToBe(toks, i);
+		String next = toks.get(i + 1).lower;
+		return ARTICLES.contains(next)
+			|| AUX.contains(next)
+			|| ADVERBS.contains(next)
+			|| COMMON_ADJ.contains(next)
+			|| isParticiple(next);
 	}
 
 	/**
-	 * Walk a run of adverbs/adjectives/participles from {@code from}; if the first
-	 * non-modifier word is a noun, the whole thing is a possessive noun phrase.
+	 * True when "there" is existential. Looks at the next token, and through a
+	 * single leading adverb ("there really IS a problem") so the adverb rule
+	 * doesn't mistake it for "they're".
 	 */
-	private boolean runEndsInNoun(List<Tok> toks, int from)
+	private boolean existentialFollows(List<Tok> toks, int i)
 	{
-		for (int j = from; j < toks.size(); j++)
+		if (i + 1 >= toks.size())
 		{
-			Pos p = classify(toks.get(j).lower);
-			if (p == Pos.ADV || p == Pos.ADJ || p == Pos.VERB)
-			{
-				continue;
-			}
-			return p == Pos.NOUN;
+			return false;
 		}
-		return false; // only modifiers to the end → "<subject> is <modifiers>"
+		if (EXISTENTIAL.contains(toks.get(i + 1).lower))
+		{
+			return true;
+		}
+		return ADVERBS.contains(toks.get(i + 1).lower)
+			&& i + 2 < toks.size()
+			&& EXISTENTIAL.contains(toks.get(i + 2).lower);
 	}
 
-	private Pos classify(String w)
+	private static boolean isParticiple(String w)
 	{
-		if (DETERMINERS.contains(w))
-		{
-			return Pos.DET;
-		}
-		if (AUX.contains(w))
-		{
-			return Pos.AUX;
-		}
-		if (COMMON_ADJ.contains(w))
-		{
-			return Pos.ADJ;
-		}
-		if (ADVERBS.contains(w))
-		{
-			return Pos.ADV;
-		}
-		if (w.length() > 3 && w.endsWith("ly") && !NOUN_LY.contains(w))
-		{
-			return Pos.ADV;
-		}
-		if (w.length() > 4 && (w.endsWith("ing") || w.endsWith("ed")) && !NOUN_ING.contains(w))
-		{
-			return Pos.VERB;
-		}
-		if (w.endsWith("ful") || w.endsWith("ous") || w.endsWith("ive")
-			|| w.endsWith("able") || w.endsWith("ible") || w.endsWith("ent")
-			|| w.endsWith("ant") || w.endsWith("less"))
-		{
-			return Pos.ADJ;
-		}
-		return Pos.NOUN;
+		return w.length() > 4 && w.endsWith("ing") && !NOUN_ING.contains(w);
 	}
 
 	private static GrammarHit hit(Tok t, String suggestion)
 	{
-		String s = suggestion;
-		// Preserve a leading capital ("Your great" → "You're great").
-		if (!t.text.isEmpty() && Character.isUpperCase(t.text.charAt(0)) && !s.isEmpty())
+		return new GrammarHit(t.text, matchCapital(t.text, suggestion), t.start, t.end);
+	}
+
+	/** Carry a leading capital from the original onto the suggestion. */
+	private static String matchCapital(String original, String suggestion)
+	{
+		if (!original.isEmpty() && Character.isUpperCase(original.charAt(0)) && !suggestion.isEmpty())
 		{
-			s = Character.toUpperCase(s.charAt(0)) + s.substring(1);
+			return Character.toUpperCase(suggestion.charAt(0)) + suggestion.substring(1);
 		}
-		return new GrammarHit(t.text, s, t.start, t.end);
+		return suggestion;
 	}
 
 	private static List<Tok> tokenize(String buffer)
@@ -331,6 +357,31 @@ class GrammarChecker
 	private static Set<String> set(String... words)
 	{
 		return Collections.unmodifiableSet(new HashSet<>(Arrays.asList(words)));
+	}
+
+	/** A fixed multi-word correction, matched case-insensitively on word boundaries. */
+	private static final class Phrase
+	{
+		private final Pattern pattern;
+		private final String replacement;
+
+		Phrase(String wrong, String replacement)
+		{
+			// Collapse internal whitespace to \s+ so spacing variations still match.
+			String body = Pattern.quote(wrong).replaceAll("\\s+", "\\\\E\\\\s+\\\\Q");
+			this.pattern = Pattern.compile("\\b" + body + "\\b", Pattern.CASE_INSENSITIVE);
+			this.replacement = replacement;
+		}
+
+		void findInto(String buffer, List<GrammarHit> hits)
+		{
+			Matcher m = pattern.matcher(buffer);
+			while (m.find())
+			{
+				String matched = buffer.substring(m.start(), m.end());
+				hits.add(new GrammarHit(matched, matchCapital(matched, replacement), m.start(), m.end()));
+			}
+		}
 	}
 
 	private static final class Tok

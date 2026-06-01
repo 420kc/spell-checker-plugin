@@ -30,7 +30,7 @@ import net.runelite.client.ui.overlay.OverlayPriority;
 class SpellcheckerOverlay extends Overlay
 {
 	private static final Color SIBLING_GREEN = new Color(30, 200, 30);
-	private static final Color GRAMMAR_BLUE = new Color(70, 130, 230);
+	private static final Color GRAMMAR_BLUE = new Color(30, 60, 170);
 
 	private final Client client;
 	private final SpellcheckerPlugin plugin;
@@ -82,7 +82,7 @@ class SpellcheckerOverlay extends Overlay
 		}
 
 		// Widget format is "RSN: <typed>*". Anchor on the colon-space separator
-		// rather than searching for `typed` inside widgetText — an RSN that
+		// rather than searching for `typed` inside widgetText - an RSN that
 		// contains the typed string (e.g. "420 kc" while typing "420") used to
 		// shadow the input.
 		String widgetText = input.getText();
@@ -107,22 +107,21 @@ class SpellcheckerOverlay extends Overlay
 			drawSquiggle(g, x1, x2, baseY);
 		}
 
-		// Blue grammar underlines — dotted to visually distinguish from green solid
-		// and the red squiggle.
+		// Blue grammar squiggle, same wave as the red one but dark blue, so it
+		// reads like Word's grammar underline rather than a row of dots.
 		if (!blue.isEmpty())
 		{
 			g.setColor(GRAMMAR_BLUE);
-			g.setStroke(new BasicStroke(1.5f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER,
-				1f, new float[]{2f, 2f}, 0f));
+			g.setStroke(new BasicStroke(1f));
 			for (GrammarHit h : blue)
 			{
 				int x1 = baseX + font.getTextWidth(typed.substring(0, h.getStart()));
 				int x2 = baseX + font.getTextWidth(typed.substring(0, h.getEnd()));
-				g.drawLine(x1, baseY, x2, baseY);
+				drawSquiggle(g, x1, x2, baseY);
 			}
 		}
 
-		// Sibling-plugin green underline — solid so it reads as a "feature" rather
+		// Sibling-plugin green underline - solid so it reads as a "feature" rather
 		// than an "error".
 		if (!green.isEmpty())
 		{
