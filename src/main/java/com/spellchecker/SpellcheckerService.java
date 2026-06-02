@@ -5,9 +5,12 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.regex.Pattern;
 import javax.inject.Singleton;
@@ -21,7 +24,8 @@ import lombok.extern.slf4j.Slf4j;
  *   - customDict: user-supplied words from config (RSNs, OSRS terms, friend names)
  *   - chatspeak: a hardcoded allowlist for the obvious abbreviations
  *
- * isCorrect() answers "is this a real word?".
+ * isCorrect() answers "is this a real word?". suggest() returns nearby words for
+ * display-only hints.
  */
 @Singleton
 @Slf4j
@@ -210,4 +214,113 @@ class SpellcheckerService
 			|| INTERJECTION.matcher(t).matches();
 	}
 
+	/**
+	 * Suggest up to {@code max} corrections for the given token by Damerau-Levenshtein
+	 * distance. Short words (<= 4 chars) only allow 1 edit to avoid noisy suggestions;
+	 * longer words allow up to 2.
+	 */
+	List<String> suggest(String token, int max)
+	{
+		if (token == null || token.isEmpty())
+		{
+			return Collections.emptyList();
+		}
+		String t = token.toLowerCase();
+		int threshold = t.length() <= 4 ? 1 : 2;
+
+		List<Scored> scored = new ArrayList<>();
+		score(t, baseDict, threshold, scored);
+		score(t, customDict, threshold, scored);
+
+		scored.sort(Comparator.<Scored>comparingInt(s -> s.distance).thenComparing(s -> s.word));
+		List<String> out = new ArrayList<>(max);
+		for (Scored s : scored)
+		{
+			if (out.size() >= max)
+			{
+				break;
+			}
+			if (!out.contains(s.word))
+			{
+				out.add(s.word);
+			}
+		}
+		return out;
+	}
+
+	private void score(String t, Set<String> dict, int threshold, List<Scored> out)
+	{
+		for (String w : dict)
+		{
+			if (Math.abs(w.length() - t.length()) > threshold)
+			{
+				continue;
+			}
+			int d = damerau(t, w, threshold);
+			if (d <= threshold)
+			{
+				out.add(new Scored(w, d));
+			}
+		}
+	}
+
+	/**
+	 * Damerau-Levenshtein distance with early-out at {@code max}. Returns max+1 if
+	 * the true distance exceeds the bound so we can prune.
+	 */
+	private static int damerau(String a, String b, int max)
+	{
+		int n = a.length();
+		int m = b.length();
+		if (Math.abs(n - m) > max)
+		{
+			return max + 1;
+		}
+		int[][] dp = new int[n + 1][m + 1];
+		for (int i = 0; i <= n; i++)
+		{
+			dp[i][0] = i;
+		}
+		for (int j = 0; j <= m; j++)
+		{
+			dp[0][j] = j;
+		}
+		for (int i = 1; i <= n; i++)
+		{
+			int rowMin = Integer.MAX_VALUE;
+			for (int j = 1; j <= m; j++)
+			{
+				int cost = (a.charAt(i - 1) == b.charAt(j - 1)) ? 0 : 1;
+				int v = Math.min(Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1), dp[i - 1][j - 1] + cost);
+				if (i > 1 && j > 1
+					&& a.charAt(i - 1) == b.charAt(j - 2)
+					&& a.charAt(i - 2) == b.charAt(j - 1))
+				{
+					v = Math.min(v, dp[i - 2][j - 2] + 1);
+				}
+				dp[i][j] = v;
+				if (v < rowMin)
+				{
+					rowMin = v;
+				}
+			}
+			if (rowMin > max)
+			{
+				return max + 1;
+			}
+		}
+		return dp[n][m];
+	}
+
+	private static final class Scored
+	{
+		final String word;
+		final int distance;
+
+		Scored(String word, int distance)
+		{
+			this.word = word;
+			this.distance = distance;
+		}
+	}
 }

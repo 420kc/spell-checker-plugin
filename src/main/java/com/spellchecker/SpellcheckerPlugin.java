@@ -302,7 +302,7 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 	@Subscribe
 	public void onMenuOpened(MenuOpened event)
 	{
-		if (!config.enabled() || flagged.isEmpty())
+		if (!config.enabled() || (flagged.isEmpty() && grammarHits.isEmpty()))
 		{
 			return;
 		}
@@ -328,6 +328,13 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 			return;
 		}
 
+		GrammarHit hit = findGrammarHitAtMouse();
+		if (hit != null)
+		{
+			addSuggestionEntry("4682e6", hit.getSuggestion());
+			return;
+		}
+
 		FlaggedToken target = findTokenAtMouse();
 		if (target == null)
 		{
@@ -340,6 +347,20 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 			.setTarget("<col=ffff00>" + word + "</col>")
 			.setType(MenuAction.RUNELITE)
 			.onClick(me -> addToDict(word));
+
+		List<String> suggestions = service.suggest(word, 3);
+		for (int i = suggestions.size() - 1; i >= 0; i--)
+		{
+			addSuggestionEntry("00ff00", suggestions.get(i));
+		}
+	}
+
+	private void addSuggestionEntry(String color, String suggestion)
+	{
+		client.getMenu().createMenuEntry(-1)
+			.setOption("Suggestion")
+			.setTarget("<col=" + color + ">" + suggestion + "</col>")
+			.setType(MenuAction.RUNELITE);
 	}
 
 	private FlaggedToken findTokenAtMouse()
@@ -354,6 +375,23 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 			if (geom.contains(t.getStart(), t.getEnd()))
 			{
 				return t;
+			}
+		}
+		return null;
+	}
+
+	private GrammarHit findGrammarHitAtMouse()
+	{
+		HitGeometry geom = hitGeometry();
+		if (geom == null)
+		{
+			return null;
+		}
+		for (GrammarHit h : grammarHits)
+		{
+			if (geom.contains(h.getStart(), h.getEnd()))
+			{
+				return h;
 			}
 		}
 		return null;

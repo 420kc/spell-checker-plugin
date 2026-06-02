@@ -8,17 +8,21 @@ sent anywhere. It all runs locally against a bundled word list.
 
 | Color | Meaning | Action |
 |-------|---------|--------|
-| Red squiggle | Misspelled word | Edit manually, or right-click **Add to dictionary** |
-| Blue squiggle | Grammar / word-use slip (their/there/they're, your/you're, should of) | Edit manually |
+| Red squiggle | Misspelled word | Right-click to see suggestions, or **Add to dictionary** |
+| Blue squiggle | Grammar / word-use slip (their/there/they're, your/you're, should of) | Right-click to see the suggestion |
 
 ## Fixing a flagged word
 
 Right-click the underlined word inside the chat input. You'll get:
 
+- **Suggestion** entries show likely corrections without changing your text.
 - **Add to dictionary** marks a red-underlined word correct forever.
 
 You can also press the **Add to dictionary** hotkey (default `Insert`) to add the
 last flagged word in your current line without right-clicking.
+
+Suggestions are hints only. Spellchecker never rewrites your chat input or
+changes an outgoing message.
 
 ## Adding / removing dictionary words
 
