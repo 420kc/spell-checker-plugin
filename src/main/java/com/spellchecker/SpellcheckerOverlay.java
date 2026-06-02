@@ -24,8 +24,7 @@ import net.runelite.client.ui.overlay.OverlayPosition;
  * KNOWN FRAGILE SPOT: finding the chatbox input widget. The gameval id for that child
  * has shifted across RuneLite versions, so we scan CHATBOX children for the one whose
  * text contains the current typed buffer. If we can't find it (e.g. login screen, bank
- * pin pad open, gameval changes again), we silently no-op and the plugin still flags
- * via logs.
+ * pin pad open, gameval changes again), we silently no-op.
  */
 class SpellcheckerOverlay extends Overlay
 {

@@ -16,7 +16,6 @@ import net.runelite.api.Client;
 import net.runelite.api.FontTypeFace;
 import net.runelite.api.MenuAction;
 import net.runelite.api.Point;
-import net.runelite.api.ScriptID;
 import net.runelite.api.events.MenuOpened;
 import net.runelite.api.events.VarClientStrChanged;
 import net.runelite.api.gameval.InterfaceID;
@@ -62,7 +61,6 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 	@Inject private SpellcheckerOverlay overlay;
 	@Inject private PluginManager pluginManager;
 	@Inject private GrammarChecker grammarChecker;
-	@Inject private AutoCorrector autoCorrector;
 	@Inject private ClientThread clientThread;
 
 	@Getter
@@ -84,8 +82,6 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 		service.setCustomDict(config.customDict());
 		service.setIgnorePunctuation(config.ignorePunctuation());
 		grammarChecker.setUserPhrases(config.grammarPhrases());
-		autoCorrector.setEnabled(config.autoCorrect());
-		autoCorrector.setList(config.autoCorrectList());
 		overlayManager.add(overlay);
 		keyManager.registerKeyListener(this);
 		refreshSiblingPlugin();
@@ -114,33 +110,7 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 		{
 			return;
 		}
-		if (config.enabled() && tryAutoCorrect())
-		{
-			// The rewrite fires another VarClientStrChanged, which re-runs this
-			// handler and re-checks the corrected text - so we stop here.
-			return;
-		}
 		recheck();
-	}
-
-	/**
-	 * Apply an auto-correction to the typed buffer if one is due. Returns true if
-	 * the buffer was rewritten (and a redraw scheduled), false otherwise.
-	 */
-	private boolean tryAutoCorrect()
-	{
-		String buf = client.getVarcStrValue(VarClientID.CHATINPUT);
-		if (buf == null || buf.isEmpty() || isCommandLine(buf))
-		{
-			return false;
-		}
-		String corrected = autoCorrector.apply(buf);
-		if (corrected == null || corrected.equals(buf))
-		{
-			return false;
-		}
-		setTypedText(corrected);
-		return true;
 	}
 
 	@Subscribe
@@ -163,12 +133,6 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 			case "grammarPhrases":
 				grammarChecker.setUserPhrases(config.grammarPhrases());
 				recheck();
-				break;
-			case "autoCorrect":
-				autoCorrector.setEnabled(config.autoCorrect());
-				break;
-			case "autoCorrectList":
-				autoCorrector.setList(config.autoCorrectList());
 				break;
 			default:
 				break;
@@ -243,7 +207,7 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 			// Don't flag the word still under the caret. A token reaching the end of
 			// the buffer has no boundary after it, so it's mid-type; like every
 			// standard spellchecker, we only judge it once a space/punctuation
-			// finishes it. (Auto-correct fires on that same boundary.)
+			// finishes it.
 			if (m.end() == buf.length())
 			{
 				continue;
@@ -267,7 +231,7 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 
 		if (config.logFlagged() && !flagged.isEmpty())
 		{
-			log.info("flagged: {}", flagged);
+			log.debug("flagged: {}", flagged);
 		}
 	}
 
@@ -338,7 +302,7 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 	@Subscribe
 	public void onMenuOpened(MenuOpened event)
 	{
-		if (!config.enabled() || (flagged.isEmpty() && grammarHits.isEmpty()))
+		if (!config.enabled() || flagged.isEmpty())
 		{
 			return;
 		}
@@ -364,46 +328,18 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 			return;
 		}
 
-		// Grammar hit takes precedence over a spelling flag if they coexist
-		// (they shouldn't - recheck enforces non-overlap - but be safe).
-		GrammarHit hit = findGrammarHitAtMouse();
-		if (hit != null)
-		{
-			final GrammarHit h = hit;
-			client.getMenu().createMenuEntry(-1)
-				.setOption("Replace with")
-				.setTarget("<col=4682e6>" + h.getSuggestion() + "</col>")
-				.setType(MenuAction.RUNELITE)
-				.onClick(me -> replaceRange(h.getStart(), h.getEnd(), h.getMatched(), h.getSuggestion()));
-			return;
-		}
-
 		FlaggedToken target = findTokenAtMouse();
 		if (target == null)
 		{
 			return;
 		}
 		final String word = target.getText();
-		final FlaggedToken tk = target;
 
-		// "Add to dictionary" entry sits below the suggestions.
 		client.getMenu().createMenuEntry(-1)
 			.setOption("Add to dictionary")
 			.setTarget("<col=ffff00>" + word + "</col>")
 			.setType(MenuAction.RUNELITE)
 			.onClick(me -> addToDict(word));
-
-		// Suggestions: insert in reverse so the top-ranked one ends up at the top.
-		List<String> suggestions = service.suggest(word, 3);
-		for (int i = suggestions.size() - 1; i >= 0; i--)
-		{
-			final String s = suggestions.get(i);
-			client.getMenu().createMenuEntry(-1)
-				.setOption("Replace with")
-				.setTarget("<col=00ff00>" + s + "</col>")
-				.setType(MenuAction.RUNELITE)
-				.onClick(me -> replaceToken(tk, s));
-		}
 	}
 
 	private FlaggedToken findTokenAtMouse()
@@ -418,23 +354,6 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 			if (geom.contains(t.getStart(), t.getEnd()))
 			{
 				return t;
-			}
-		}
-		return null;
-	}
-
-	private GrammarHit findGrammarHitAtMouse()
-	{
-		HitGeometry geom = hitGeometry();
-		if (geom == null)
-		{
-			return null;
-		}
-		for (GrammarHit h : grammarHits)
-		{
-			if (geom.contains(h.getStart(), h.getEnd()))
-			{
-				return h;
 			}
 		}
 		return null;
@@ -501,45 +420,6 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 			// 2px slack so edge clicks count.
 			return relX >= xStart - 2 && relX <= xEnd + 2;
 		}
-	}
-
-	private void replaceToken(FlaggedToken token, String replacement)
-	{
-		replaceRange(token.getStart(), token.getEnd(), token.getText(), replacement);
-	}
-
-	private void replaceRange(int start, int end, String expected, String replacement)
-	{
-		String buf = client.getVarcStrValue(VarClientID.CHATINPUT);
-		if (buf == null || end > buf.length())
-		{
-			return;
-		}
-		// Race-condition guard: range might have shifted if the user kept typing.
-		String found = buf.substring(start, end);
-		if (!found.equalsIgnoreCase(expected))
-		{
-			return;
-		}
-		String updated = buf.substring(0, start) + replacement + buf.substring(end);
-		setTypedText(updated);
-		log.debug("replaced '{}' with '{}'", expected, replacement);
-	}
-
-	/**
-	 * Write {@code text} into the chatbox input and force it to repaint now.
-	 * Setting the varc alone updates the value but not the on-screen line - the
-	 * old behaviour needed a stray keystroke (spacebar) to refresh. Running
-	 * CHAT_TEXT_INPUT_REBUILD rebuilds the input widget from the varc immediately,
-	 * so the change is visible the instant it happens.
-	 */
-	private void setTypedText(String text)
-	{
-		clientThread.invokeLater(() ->
-		{
-			client.setVarcStrValue(VarClientID.CHATINPUT, text);
-			client.runScript(ScriptID.CHAT_TEXT_INPUT_REBUILD, "");
-		});
 	}
 
 	private void addToDict(String word)
