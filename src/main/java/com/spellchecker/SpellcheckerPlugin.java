@@ -78,6 +78,7 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 	@Override
 	protected void startUp()
 	{
+		clearAnalysisState();
 		service.load();
 		service.setCustomDict(config.customDict());
 		service.setIgnorePunctuation(config.ignorePunctuation());
@@ -93,7 +94,7 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 	{
 		overlayManager.remove(overlay);
 		keyManager.unregisterKeyListener(this);
-		flagged.clear();
+		clearAnalysisState();
 		log.debug("Spellchecker stopped");
 	}
 
@@ -168,9 +169,7 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 
 	private void recheck()
 	{
-		flagged.clear();
-		greenRanges.clear();
-		grammarHits.clear();
+		clearAnalysisState();
 		if (!config.enabled())
 		{
 			return;
@@ -233,6 +232,13 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 		{
 			log.debug("flagged: {}", flagged);
 		}
+	}
+
+	private void clearAnalysisState()
+	{
+		flagged.clear();
+		greenRanges.clear();
+		grammarHits.clear();
 	}
 
 	// Command lines (::dz, ;;ge, /p, ~clan) pass straight through, never flagged.
