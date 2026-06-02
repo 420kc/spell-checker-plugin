@@ -6270,7 +6270,7 @@ musa
 karamja's
 
 # top 10k frequency-ranked English words (zxcvbn english_wikipedia.txt, MIT)
-# Bulk import — duplicates with curated lists above are harmless (HashSet dedupes at load).
+# Bulk import - duplicates with curated lists above are harmless (HashSet dedupes at load).
 the
 of
 and

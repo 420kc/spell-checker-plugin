@@ -10,16 +10,16 @@ import javax.inject.Inject;
 import net.runelite.api.Client;
 import net.runelite.api.FontTypeFace;
 import net.runelite.api.Point;
-import net.runelite.api.VarClientStr;
 import net.runelite.api.gameval.InterfaceID;
+import net.runelite.api.gameval.VarClientID;
 import net.runelite.api.widgets.Widget;
 import net.runelite.client.ui.overlay.Overlay;
 import net.runelite.client.ui.overlay.OverlayLayer;
 import net.runelite.client.ui.overlay.OverlayPosition;
-import net.runelite.client.ui.overlay.OverlayPriority;
 
 /**
- * Draws red squiggles beneath flagged tokens in the typed chat buffer.
+ * Draws the underlines beneath the typed chat buffer: red squiggles for spelling,
+ * blue squiggles for grammar, and a solid green mark for sibling-plugin phrases.
  *
  * KNOWN FRAGILE SPOT: finding the chatbox input widget. The gameval id for that child
  * has shifted across RuneLite versions, so we scan CHATBOX children for the one whose
@@ -44,7 +44,7 @@ class SpellcheckerOverlay extends Overlay
 		this.config = config;
 		setPosition(OverlayPosition.DYNAMIC);
 		setLayer(OverlayLayer.ABOVE_WIDGETS);
-		setPriority(OverlayPriority.HIGH);
+		setPriority(PRIORITY_HIGH);
 	}
 
 	@Override
@@ -63,7 +63,7 @@ class SpellcheckerOverlay extends Overlay
 			return null;
 		}
 
-		String typed = client.getVarcStrValue(VarClientStr.CHATBOX_TYPED_TEXT);
+		String typed = client.getVarcStrValue(VarClientID.CHATINPUT);
 		if (typed == null || typed.isEmpty())
 		{
 			return null;

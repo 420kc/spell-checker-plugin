@@ -12,6 +12,7 @@ import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.regex.Pattern;
 import javax.inject.Singleton;
 import lombok.extern.slf4j.Slf4j;
 
@@ -23,8 +24,8 @@ import lombok.extern.slf4j.Slf4j;
  *   - customDict: user-supplied words from config (RSNs, OSRS terms, friend names)
  *   - chatspeak: a hardcoded allowlist for the obvious abbreviations
  *
- * isCorrect() is the only consumer. Suggestion generation lives separately and is
- * intentionally not part of v0 - get flagging right first, then add suggestions.
+ * isCorrect() answers "is this a real word?". suggest() returns the nearest
+ * dictionary words by edit distance, for the right-click fix menu.
  */
 @Singleton
 @Slf4j
@@ -42,9 +43,15 @@ class SpellcheckerService
 	)));
 
 	// Repeated-syllable laughs: haha, hahaha, hehe, hehehe, lolol, lololol, etc.
-	private static final java.util.regex.Pattern LAUGH = java.util.regex.Pattern.compile(
+	private static final Pattern LAUGH = Pattern.compile(
 		"^(ha)+h?$|^(he)+h?$|^(lo)+l?$|^(ah){2,}$|^(eh){2,}$|^a+h+$|^o+h+$|^u+g+h+$"
 	);
+
+	// Numbers with optional k/m/b (1m, 500k, 100), account-style alphanumerics
+	// (w301, lvl99), and drawn-out interjections (yo/yoo/yooo, ayy, woo).
+	private static final Pattern NUMBER = Pattern.compile("\\d+[kmb]?");
+	private static final Pattern ACCOUNT = Pattern.compile("[a-z]+\\d+|\\d+[a-z]+");
+	private static final Pattern INTERJECTION = Pattern.compile("yo+|ay+|wo+");
 
 	private final Set<String> baseDict = new HashSet<>();
 	private final Set<String> customDict = new HashSet<>();
@@ -153,18 +160,18 @@ class SpellcheckerService
 			{
 				return true;
 			}
-			// e-drop reversal: hoped → hope, taker → take, making → make
+			// e-drop reversal: hoped -> hope, taker -> take, making -> make
 			if (inDict(root + "e"))
 			{
 				return true;
 			}
-			// consonant-doubling reversal: running → run, stopped → stop, planner → plan
+			// consonant-doubling reversal: running -> run, stopped -> stop, planner -> plan
 			if (root.length() >= 2 && root.charAt(root.length() - 1) == root.charAt(root.length() - 2)
 				&& inDict(root.substring(0, root.length() - 1)))
 			{
 				return true;
 			}
-			// y/i reversal: happily → happy, easier → easy, prettiest → pretty
+			// y/i reversal: happily -> happy, easier -> easy, prettiest -> pretty
 			if (root.endsWith("i") && inDict(root.substring(0, root.length() - 1) + "y"))
 			{
 				return true;
@@ -201,32 +208,15 @@ class SpellcheckerService
 		{
 			return true;
 		}
-		// numbers with optional k/m/b suffix: 1m, 500k, 2b, 100
-		if (t.matches("\\d+[kmb]?"))
-		{
-			return true;
-		}
-		// account-style alphanumeric mix: w301, lvl99 - leave alone
-		if (t.matches("[a-z]+\\d+") || t.matches("\\d+[a-z]+"))
-		{
-			return true;
-		}
-		// haha / hehe / lolol / ahhh / ohhh / ughhh
-		if (LAUGH.matcher(t).matches())
-		{
-			return true;
-		}
-		// drawn-out interjections: yo / yoo / yooo, ayy / ayyy, woo / wooo
-		if (t.matches("yo+") || t.matches("ay+") || t.matches("wo+"))
-		{
-			return true;
-		}
-		return false;
+		return NUMBER.matcher(t).matches()
+			|| ACCOUNT.matcher(t).matches()
+			|| LAUGH.matcher(t).matches()
+			|| INTERJECTION.matcher(t).matches();
 	}
 
 	/**
 	 * Suggest up to {@code max} corrections for the given token by Damerau-Levenshtein
-	 * distance. Short words (≤4 chars) only allow 1 edit to avoid noisy suggestions;
+	 * distance. Short words (<= 4 chars) only allow 1 edit to avoid noisy suggestions;
 	 * longer words allow up to 2.
 	 */
 	List<String> suggest(String token, int max)

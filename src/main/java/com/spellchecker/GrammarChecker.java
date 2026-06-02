@@ -3,6 +3,7 @@ package com.spellchecker;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -183,9 +184,9 @@ class GrammarChecker
 		{
 			return hits;
 		}
-		hits.sort(java.util.Comparator
+		hits.sort(Comparator
 			.comparingInt(GrammarHit::getStart)
-			.thenComparing(java.util.Comparator.comparingInt(GrammarHit::getEnd).reversed()));
+			.thenComparing(Comparator.comparingInt(GrammarHit::getEnd).reversed()));
 		List<GrammarHit> out = new ArrayList<>(hits.size());
 		int lastEnd = -1;
 		for (GrammarHit h : hits)

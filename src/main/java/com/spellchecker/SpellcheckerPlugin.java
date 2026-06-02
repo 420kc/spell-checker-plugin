@@ -17,10 +17,10 @@ import net.runelite.api.FontTypeFace;
 import net.runelite.api.MenuAction;
 import net.runelite.api.Point;
 import net.runelite.api.ScriptID;
-import net.runelite.api.VarClientStr;
 import net.runelite.api.events.MenuOpened;
 import net.runelite.api.events.VarClientStrChanged;
 import net.runelite.api.gameval.InterfaceID;
+import net.runelite.api.gameval.VarClientID;
 import net.runelite.api.widgets.Widget;
 import net.runelite.client.callback.ClientThread;
 import net.runelite.client.config.ConfigManager;
@@ -110,7 +110,7 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 	@Subscribe
 	public void onVarClientStrChanged(VarClientStrChanged e)
 	{
-		if (e.getIndex() != VarClientStr.CHATBOX_TYPED_TEXT)
+		if (e.getIndex() != VarClientID.CHATINPUT)
 		{
 			return;
 		}
@@ -129,9 +129,8 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 	 */
 	private boolean tryAutoCorrect()
 	{
-		String buf = client.getVarcStrValue(VarClientStr.CHATBOX_TYPED_TEXT);
-		if (buf == null || buf.isEmpty()
-			|| buf.startsWith("::") || buf.startsWith(";;") || buf.startsWith("/") || buf.startsWith("~"))
+		String buf = client.getVarcStrValue(VarClientID.CHATINPUT);
+		if (buf == null || buf.isEmpty() || isCommandLine(buf))
 		{
 			return false;
 		}
@@ -213,13 +212,8 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 			return;
 		}
 
-		String buf = client.getVarcStrValue(VarClientStr.CHATBOX_TYPED_TEXT);
-		if (buf == null || buf.isEmpty())
-		{
-			return;
-		}
-		// Skip command lines so ::dz, ;;ge, /p, ~clan don't get flagged.
-		if (buf.startsWith("::") || buf.startsWith(";;") || buf.startsWith("/") || buf.startsWith("~"))
+		String buf = client.getVarcStrValue(VarClientID.CHATINPUT);
+		if (buf == null || buf.isEmpty() || isCommandLine(buf))
 		{
 			return;
 		}
@@ -229,11 +223,9 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 		//   1. green (sibling-plugin brand mark)
 		//   2. blue  (grammar)
 		//   3. red   (spelling)
-		String lower = buf.toLowerCase();
-
 		if (siblingPluginLoaded)
 		{
-			greenRanges.addAll(scanSiblingRanges(lower));
+			greenRanges.addAll(scanSiblingRanges(buf));
 		}
 
 		// Grammar hits are single, non-overlapping tokens - only filter against green.
@@ -248,6 +240,14 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 		Matcher m = TOKEN_PATTERN.matcher(buf);
 		while (m.find())
 		{
+			// Don't flag the word still under the caret. A token reaching the end of
+			// the buffer has no boundary after it, so it's mid-type; like every
+			// standard spellchecker, we only judge it once a space/punctuation
+			// finishes it. (Auto-correct fires on that same boundary.)
+			if (m.end() == buf.length())
+			{
+				continue;
+			}
 			String tok = m.group();
 			if (tok.length() < config.minLength())
 			{
@@ -269,6 +269,13 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 		{
 			log.info("flagged: {}", flagged);
 		}
+	}
+
+	// Command lines (::dz, ;;ge, /p, ~clan) pass straight through, never flagged.
+	private static boolean isCommandLine(String buf)
+	{
+		return buf.startsWith("::") || buf.startsWith(";;")
+			|| buf.startsWith("/") || buf.startsWith("~");
 	}
 
 	private static boolean overlapsAny(int start, int end, List<int[]> ranges)
@@ -363,7 +370,7 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 		if (hit != null)
 		{
 			final GrammarHit h = hit;
-			client.createMenuEntry(-1)
+			client.getMenu().createMenuEntry(-1)
 				.setOption("Replace with")
 				.setTarget("<col=4682e6>" + h.getSuggestion() + "</col>")
 				.setType(MenuAction.RUNELITE)
@@ -380,7 +387,7 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 		final FlaggedToken tk = target;
 
 		// "Add to dictionary" entry sits below the suggestions.
-		client.createMenuEntry(-1)
+		client.getMenu().createMenuEntry(-1)
 			.setOption("Add to dictionary")
 			.setTarget("<col=ffff00>" + word + "</col>")
 			.setType(MenuAction.RUNELITE)
@@ -391,7 +398,7 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 		for (int i = suggestions.size() - 1; i >= 0; i--)
 		{
 			final String s = suggestions.get(i);
-			client.createMenuEntry(-1)
+			client.getMenu().createMenuEntry(-1)
 				.setOption("Replace with")
 				.setTarget("<col=00ff00>" + s + "</col>")
 				.setType(MenuAction.RUNELITE)
@@ -446,7 +453,7 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 		{
 			return null;
 		}
-		String typed = client.getVarcStrValue(VarClientStr.CHATBOX_TYPED_TEXT);
+		String typed = client.getVarcStrValue(VarClientID.CHATINPUT);
 		if (typed == null || typed.isEmpty())
 		{
 			return null;
@@ -503,7 +510,7 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 
 	private void replaceRange(int start, int end, String expected, String replacement)
 	{
-		String buf = client.getVarcStrValue(VarClientStr.CHATBOX_TYPED_TEXT);
+		String buf = client.getVarcStrValue(VarClientID.CHATINPUT);
 		if (buf == null || end > buf.length())
 		{
 			return;
@@ -530,7 +537,7 @@ public class SpellcheckerPlugin extends Plugin implements KeyListener
 	{
 		clientThread.invokeLater(() ->
 		{
-			client.setVarcStrValue(VarClientStr.CHATBOX_TYPED_TEXT, text);
+			client.setVarcStrValue(VarClientID.CHATINPUT, text);
 			client.runScript(ScriptID.CHAT_TEXT_INPUT_REBUILD, "");
 		});
 	}

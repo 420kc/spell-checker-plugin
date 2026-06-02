@@ -10,7 +10,7 @@ public class SpellcheckerPluginTest
 	{
 		java.util.List<Class<? extends Plugin>> plugins = new java.util.ArrayList<>();
 		plugins.add(SpellcheckerPlugin.class);
-		// Sibling plugins for dev-session detection — conditional, ignored if absent.
+		// Sibling plugins for dev-session detection - conditional, ignored if absent.
 		tryLoad(plugins, "com.rank1.Rank1Plugin");
 		tryLoad(plugins, "com.fourtwentykc.FourTwentyKcPlugin");
 		tryLoad(plugins, "com.killclog.KillClogPlugin");

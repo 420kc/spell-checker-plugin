@@ -3,7 +3,7 @@ package com.spellchecker;
 /**
  * Grammar-check aggression. Surfaced in config so the user dials it.
  *   OFF        - no grammar underlines at all.
- *   SAFE       - only unambiguous errors (alot, "should of", comparative + then).
+ *   SAFE       - only unambiguous errors ("should of", comparative + "then") plus user phrases.
  *   AGGRESSIVE - the above plus context-aware homophones (your/you're, etc.).
  */
 public enum GrammarMode
